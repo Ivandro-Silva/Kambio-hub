@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Ivandro Silva — Hub Financeiro</title>
+
+<script type="module">
+import { initializeApp }   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, enableIndexedDbPersistence }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey:            "AIzaSyD_dc1z0cLy0cqrtQhy52AuRnFosCtKANQ",
+  authDomain:        "kambio-business.firebaseapp.com",
+  projectId:         "kambio-business",
+  storageBucket:     "kambio-business.firebasestorage.app",
+  messagingSenderId: "830662712719",
+  appId:             "1:830662712719:web:abc695b03a706217ebbffa"
+};
+
+// ── COLLECTIONS ────────────────────────────────────────────────────
+const COLS = ["hub_income","hub_expenses","hub_custody","hub_taxi","hub_imports","hub_taxi_costs"];
+
+let app, db_fire;
+let db = { hub_income:[], hub_expenses:[], hub_custody:[], hub_taxi:[], hub_imports:[], hub_taxi_costs:[] };
+
+// ── FIREBASE INIT ──────────────────────────────────────────────────
+async function initFirebase() {
+  try {
+    app = initializeApp(firebaseConfig, "hub");
+    db_fire = getFirestore(app);
+    await enableIndexedDbPersistence(db_fire).catch(()=>{});
+    setStatus("connecting");
+    COLS.forEach(col => {
+      onSnapshot(collection(db_fire, col), snap => {
+        db[col] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        render();
+        setStatus("online");
+      }, () => setStatus("offline"));
+    });
+  } catch(e) {
+    console.error(e);
+    setStatus("error");
+  }
+}
+
+async function saveDoc(col, item) {
+  const id = item.id ? String(item.id) : String(Date.now());
+  const data = { ...item, id };
+  await setDoc(doc(db_fire, col, id), data);
+  return id;
+}
+async function delDoc(col, id) {
+  await deleteDoc(doc(db_fire, col, String(id)));
+}
+
+function setStatus(s) {
+  const el = document.getElementById("hub-status");
+  if (!el) return;
+  const map = { online:["🟢","#50c878"], offline:["🟡","#c9a84c"], connecting:["🔵","#7eb8f7"], error:["🔴","#ff5050"] };
+  const [icon, color] = map[s]||map.error;
+  el.innerHTML = `<span style="font-size:9px;color:${color}">${icon} ${s.toUpperCase()}</span>`;
+}
+
+// ── FORMATTERS ─────────────────────────────────────────────────────
+const fKz   = v => `${Number(v||0).toLocaleString("pt-AO",{minimumFractionDigits:2,maximumFractionDigits:2})} Kz`;
+const fUSD  = v => `$${Number(v||0).toFixed(2)}`;
+const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
+const today = () => new Date().toISOString().split("T")[0];
+const uid   = () => Date.now();
+
+// ── PAGES ──────────────────────────────────────────────────────────
+const PAGES = [
+  {id:"resumo",      label:"Resumo Geral",  icon:"▣"},
+  {id:"pessoal",     label:"Finanças",      icon:"◆"},
+  {id:"taxi",        label:"Táxi",          icon:"◉"},
+  {id:"importacao",  label:"Importação",    icon:"◈"},
+  {id:"custodia",    label:"Custódia",      icon:"🔒"},
+  {id:"calculadora", label:"Calculadora",   icon:"⊕"},
+];
+
+let page = "resumo";
+let modal = null;
+
+function render() {
+  const el = document.getElementById("app");
+  if (!el) return;
+  el.innerHTML = layout();
+  attachAll();
+}
+
+function layout() {
+  return `
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="bname">IVANDRO</span>
+      <span class="bsub">HUB FINANCEIRO</span>
+    </div>
+    <nav>${PAGES.map(p=>`
+      <button class="nav${page===p.id?" act":""}" onclick="go('${p.id}')">
+        <span style="font-size:14px;width:20px">${p.icon}</span><span>${p.label}</span>
+      </button>`).join("")}
+    </nav>
+    <div class="sidebar-foot">
+      <div style="font-size:10px;color:#555;letter-spacing:2px;margin-bottom:6px">META 2026</div>
+      ${goalBar()}
+      <div id="hub-status" style="margin-top:8px"></div>
+    </div>
+  </aside>
+  <div class="veil" id="veil" onclick="closeMenu()"></div>
+  <div class="main">
+    <header class="hdr">
+      <button class="ham" onclick="toggleMenu()">☰</button>
+      <div>
+        <div class="ptitle">${PAGES.find(p=>p.id===page)?.label}</div>
+        <div class="pdate">${new Date().toLocaleDateString("pt-AO",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div>
+      </div>
+      <a href="https://kambio-business.web.app" style="margin-left:auto;font-size:10px;color:#c9a84c;text-decoration:none;letter-spacing:1px;border:1px solid #c9a84c33;padding:6px 12px;border-radius:2px">↗ KÂMBIO</a>
+    </header>
+    <div class="body">
+      ${buildPage()}
+      ${modal ? buildModal() : ""}
+    </div>
+  </div>`;
+}
+
+function go(p) { page=p; closeMenu(); render(); }
+function toggleMenu(){ document.getElementById("sidebar")?.classList.toggle("open"); document.getElementById("veil")?.classList.toggle("show"); }
+function closeMenu(){ document.getElementById("sidebar")?.classList.remove("open"); document.getElementById("veil")?.classList.remove("show"); }
+window.go=go; window.toggleMenu=toggleMenu; window.closeMenu=closeMenu;
+
+// ── GOAL BAR ───────────────────────────────────────────────────────
+function goalBar() {
+  const meta = 2000000;
+  const total = patrimonio();
+  const pct = Math.min(100, (total/meta)*100).toFixed(1);
+  return `
+  <div style="font-size:11px;color:#c9a84c;font-weight:700;margin-bottom:4px">${fKz(total)} / ${fKz(meta)}</div>
+  <div style="background:#1a1a2e;border-radius:2px;height:6px;overflow:hidden">
+    <div style="background:linear-gradient(90deg,#c9a84c,#50c878);width:${pct}%;height:100%;transition:width .5s"></div>
+  </div>
+  <div style="font-size:10px;color:#555;margin-top:3px">${pct}% da meta</div>`;
+}
+
+// ── PATRIMÔNIO TOTAL (excluindo custódia) ──────────────────────────
+function patrimonio() {
+  // personal income - expenses
+  const income   = db.hub_income.reduce((s,x)=>s+Number(x.amount||0),0);
+  const expenses = db.hub_expenses.reduce((s,x)=>s+Number(x.amount||0),0);
+  // taxi net
+  const taxiIn   = db.hub_taxi.reduce((s,x)=>s+Number(x.amount||0),0);
+  const taxiCost = db.hub_taxi_costs.reduce((s,x)=>s+Number(x.amount||0),0);
+  // imports profit
+  const importProfit = db.hub_imports.filter(i=>i.status==="vendido").reduce((s,i)=>s+Number(i.profitKz||0),0);
+  return income - expenses + taxiIn - taxiCost + importProfit;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  PAGES
+// ══════════════════════════════════════════════════════════════════
+function buildPage() {
+  switch(page) {
+    case "resumo":      return pageResumo();
+    case "pessoal":     return pagePessoal();
+    case "taxi":        return pageTaxi();
+    case "importacao":  return pageImportacao();
+    case "custodia":    return pageCustodia();
+    case "calculadora": return pageCalculadora();
+    default: return "";
+  }
+}
+
+// ── RESUMO GERAL ───────────────────────────────────────────────────
+function pageResumo() {
+  const meta = 2000000;
+  const total = patrimonio();
+  const pct = Math.min(100,(total/meta)*100).toFixed(1);
+  const falta = Math.max(0, meta - total);
+
+  const income   = db.hub_income.reduce((s,x)=>s+Number(x.amount||0),0);
+  const expenses = db.hub_expenses.reduce((s,x)=>s+Number(x.amount||0),0);
+  const taxiIn   = db.hub_taxi.reduce((s,x)=>s+Number(x.amount||0),0);
+  const taxiCost = db.hub_taxi_costs.reduce((s,x)=>s+Number(x.amount||0),0);
+  const importProfit = db.hub_imports.filter(i=>i.status==="vendido").reduce((s,i)=>s+Number(i.profitKz||0),0);
+  const custodia = db.hub_custody.reduce((s,x)=>s+Number(x.amount||0),0);
+  const custodiaDevolvido = db.hub_custody.filter(x=>x.returned).reduce((s,x)=>s+Number(x.amount||0),0);
+  const custodiaAtiva = custodia - custodiaDevolvido;
+
+  // 50/30/20 from kambio — would come from shared Firebase (read kambio sales)
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(),now.getMonth(),1);
+
+  return `
+  <!-- META -->
+  <div class="card" style="margin-bottom:20px;border-color:#c9a84c33;background:linear-gradient(135deg,#0f0f1a,#111120)">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+      <div>
+        <div style="font-size:10px;color:#c9a84c;letter-spacing:3px;margin-bottom:6px">META PATRIMONIAL 2026</div>
+        <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:#e8e4d9">${fKz(total)}</div>
+        <div style="font-size:12px;color:#555;margin-top:4px">Faltam <span style="color:#c9a84c">${fKz(falta)}</span> para os 2.000.000 Kz</div>
+      </div>
+      <div style="font-family:'Syne',sans-serif;font-size:32px;font-weight:800;color:${pct>=100?"#50c878":"#c9a84c"}">${pct}%</div>
+    </div>
+    <div style="background:#1a1a2e;border-radius:4px;height:10px;overflow:hidden">
+      <div style="background:linear-gradient(90deg,#c9a84c,#50c878);width:${pct}%;height:100%;transition:width 1s;border-radius:4px"></div>
+    </div>
+  </div>
+
+  <div class="grid4" style="margin-bottom:20px">
+    ${sc("Finanças Pessoais", fKz(income-expenses), income-expenses>=0?"#50c878":"#ff5050","◆")}
+    ${sc("Táxi (líquido)", fKz(taxiIn-taxiCost), "#7eb8f7","◉")}
+    ${sc("Importação (lucro)", fKz(importProfit), "#c084fc","◈")}
+    ${sc("Em Custódia", fKz(custodiaAtiva), "#ff7850","🔒")}
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="sec-title">Decomposição do Património</div>
+      <div class="row"><span>Entradas pessoais</span><span style="color:#50c878">${fKz(income)}</span></div>
+      <div class="row"><span>Despesas pessoais</span><span style="color:#ff7850">- ${fKz(expenses)}</span></div>
+      <div class="row"><span>Receita do Táxi</span><span style="color:#7eb8f7">${fKz(taxiIn)}</span></div>
+      <div class="row"><span>Custos do Táxi</span><span style="color:#ff7850">- ${fKz(taxiCost)}</span></div>
+      <div class="row"><span>Lucro Importação</span><span style="color:#c084fc">${fKz(importProfit)}</span></div>
+      <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+        <div class="row bold"><span>TOTAL (é teu)</span><span style="color:#c9a84c;font-size:15px">${fKz(total)}</span></div>
+        <div class="row"><span style="color:#555">Em custódia (não é teu)</span><span style="color:#ff7850">- ${fKz(custodiaAtiva)}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sec-title">💡 Regra 50 · 30 · 20</div>
+      <div style="font-size:12px;color:#666;margin-bottom:14px">Aplica ao lucro da Kâmbio Business:</div>
+      <div class="bud-box" style="border-color:#7eb8f7">
+        <div class="bud-label">REINVESTIR NO NEGÓCIO (50%)</div>
+        <div class="bud-val" style="color:#7eb8f7">—</div>
+        <div style="font-size:10px;color:#444;margin-top:3px">Capital de giro da Kâmbio</div>
+      </div>
+      <div class="bud-box" style="border-color:#50c878">
+        <div class="bud-label">O TEU SALÁRIO (30%)</div>
+        <div class="bud-val" style="color:#50c878">—</div>
+        <div style="font-size:10px;color:#444;margin-top:3px">Regista em Finanças Pessoais</div>
+      </div>
+      <div class="bud-box" style="border-color:#c9a84c">
+        <div class="bud-label">POUPANÇA PAYPAY (20%)</div>
+        <div class="bud-val" style="color:#c9a84c">—</div>
+        <div style="font-size:10px;color:#444;margin-top:3px">Rendimento+ na PayPay</div>
+      </div>
+      <div style="font-size:11px;color:#555;margin-top:10px">Regista o lucro mensal da Kâmbio na página de Finanças para activar o cálculo automático.</div>
+    </div>
+  </div>`;
+}
+
+// ── FINANÇAS PESSOAIS ──────────────────────────────────────────────
+function pagePessoal() {
+  const income   = db.hub_income.reduce((s,x)=>s+Number(x.amount||0),0);
+  const expenses = db.hub_expenses.reduce((s,x)=>s+Number(x.amount||0),0);
+  const balance  = income - expenses;
+
+  const INCOME_CATS  = ["Salário","Lucro Kâmbio (30%)","Serviços Extras","Importação","Táxi","Outro"];
+  const EXPENSE_CATS = ["Alimentação","Transporte","Telecomunicações","Lazer","Vestuário","Cota Juventude","Outro"];
+
+  return `
+  <div class="grid4" style="margin-bottom:20px">
+    ${sc("Total Entradas", fKz(income),"#50c878","▲")}
+    ${sc("Total Saídas", fKz(expenses),"#ff7850","▼")}
+    ${sc("Saldo Pessoal", fKz(balance), balance>=0?"#c9a84c":"#ff5050","◆")}
+    ${sc("Movimentos", db.hub_income.length+db.hub_expenses.length,"#7eb8f7","◈")}
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="sec-title" style="margin:0">Entradas</div>
+        <button class="btn-p" onclick="openModal('income')">+ ENTRADA</button>
+      </div>
+      ${db.hub_income.length===0?empty():`
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
+        <tbody>${[...db.hub_income].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(x=>`
+          <tr>
+            <td>${fDate(x.date)}</td>
+            <td><span class="cat-badge green">${x.category}</span></td>
+            <td style="color:#aaa">${x.description||"—"}</td>
+            <td style="color:#50c878;font-weight:700">${fKz(x.amount)}</td>
+            <td><button class="btn-d" onclick="del('hub_income','${x.id}')">✕</button></td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>`}
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="sec-title" style="margin:0">Saídas</div>
+        <button class="btn-p" onclick="openModal('expense')">+ SAÍDA</button>
+      </div>
+      ${db.hub_expenses.length===0?empty():`
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
+        <tbody>${[...db.hub_expenses].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(x=>`
+          <tr>
+            <td>${fDate(x.date)}</td>
+            <td><span class="cat-badge red">${x.category}</span></td>
+            <td style="color:#aaa">${x.description||"—"}</td>
+            <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
+            <td><button class="btn-d" onclick="del('hub_expenses','${x.id}')">✕</button></td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>`}
+    </div>
+  </div>
+
+  ${modal==="income"?modalForm("NOVA ENTRADA","income",[
+    {id:"date",label:"Data",type:"date",val:today()},
+    {id:"category",label:"Categoria",type:"select",opts:INCOME_CATS},
+    {id:"amount",label:"Valor (Kz)",type:"number",placeholder:"ex: 150000"},
+    {id:"description",label:"Descrição",type:"text",placeholder:"ex: Salário Junho"},
+  ],async()=>{
+    const d=gv("date"),c=gv("category"),a=parseFloat(gv("amount")||0),desc=gv("description");
+    if(!a||!c)return alert("Preenche categoria e valor.");
+    await saveDoc("hub_income",{id:uid(),date:d,category:c,amount:a,description:desc});
+    modal=null;render();
+  }):""}
+  ${modal==="expense"?modalForm("NOVA SAÍDA","expense",[
+    {id:"date",label:"Data",type:"date",val:today()},
+    {id:"category",label:"Categoria",type:"select",opts:EXPENSE_CATS},
+    {id:"amount",label:"Valor (Kz)",type:"number",placeholder:"ex: 5000"},
+    {id:"description",label:"Descrição",type:"text",placeholder:"ex: Supermercado Shoprite"},
+  ],async()=>{
+    const d=gv("date"),c=gv("category"),a=parseFloat(gv("amount")||0),desc=gv("description");
+    if(!a||!c)return alert("Preenche categoria e valor.");
+    await saveDoc("hub_expenses",{id:uid(),date:d,category:c,amount:a,description:desc});
+    modal=null;render();
+  }):""}`;
+}
+
+// ── TÁXI ───────────────────────────────────────────────────────────
+function pageTaxi() {
+  const entries = [...db.hub_taxi].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const costs   = [...db.hub_taxi_costs].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const totalIn   = db.hub_taxi.reduce((s,x)=>s+Number(x.amount||0),0);
+  const totalCost = db.hub_taxi_costs.reduce((s,x)=>s+Number(x.amount||0),0);
+  const liquid    = totalIn - totalCost;
+  // breakeven: total cost invested vs total revenue
+  const pctBreak  = totalCost>0 ? Math.min(100,(totalIn/totalCost)*100).toFixed(1) : 0;
+
+  const COST_CATS = ["Compra do Carro","Peça/Reparação","Combustível","Manutenção Preventiva","Caixa de Segurança","Seguro","Outro"];
+
+  return `
+  <div class="grid4" style="margin-bottom:20px">
+    ${sc("Receita Total", fKz(totalIn),"#50c878","▲")}
+    ${sc("Custos Totais", fKz(totalCost),"#ff7850","▼")}
+    ${sc("Líquido", fKz(liquid), liquid>=0?"#c9a84c":"#ff5050","◆")}
+    ${sc("Recuperado", pctBreak+"%","#7eb8f7","◈")}
+  </div>
+
+  <!-- Breakeven visual -->
+  <div class="card" style="margin-bottom:20px">
+    <div class="sec-title">Breakeven — Recuperação do Investimento</div>
+    <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:8px">
+      <span>Investido: <span style="color:#ff7850">${fKz(totalCost)}</span></span>
+      <span>Recuperado: <span style="color:#50c878">${fKz(totalIn)}</span></span>
+      <span style="color:${liquid>=0?"#50c878":"#ff7850"}">${liquid>=0?"✅ BREAKEVEN ATINGIDO":"Faltam "+fKz(Math.abs(liquid))}</span>
+    </div>
+    <div style="background:#1a1a2e;border-radius:4px;height:10px;overflow:hidden">
+      <div style="background:linear-gradient(90deg,#ff7850,#c9a84c,#50c878);width:${pctBreak}%;height:100%;transition:width 1s;border-radius:4px"></div>
+    </div>
+    <div style="font-size:10px;color:#555;margin-top:4px">${pctBreak}% do investimento recuperado</div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="sec-title" style="margin:0">Receitas Diárias</div>
+        <button class="btn-p" onclick="openModal('taxi-in')">+ RECEITA</button>
+      </div>
+      ${entries.length===0?empty("Sem receitas registadas"):`
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Data</th><th>Tipo</th><th>Valor</th><th>Notas</th><th></th></tr></thead>
+        <tbody>${entries.map(x=>`<tr>
+          <td>${fDate(x.date)}</td>
+          <td><span class="cat-badge green">${x.type||"Diária"}</span></td>
+          <td style="color:#50c878;font-weight:700">${fKz(x.amount)}</td>
+          <td style="color:#555">${x.notes||"—"}</td>
+          <td><button class="btn-d" onclick="del('hub_taxi','${x.id}')">✕</button></td>
+        </tr>`).join("")}</tbody>
+      </table></div>`}
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="sec-title" style="margin:0">Custos & Investimentos</div>
+        <button class="btn-p" onclick="openModal('taxi-cost')">+ CUSTO</button>
+      </div>
+      ${costs.length===0?empty("Sem custos registados"):`
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Data</th><th>Categoria</th><th>Valor</th><th>Descrição</th><th></th></tr></thead>
+        <tbody>${costs.map(x=>`<tr>
+          <td>${fDate(x.date)}</td>
+          <td><span class="cat-badge red">${x.category}</span></td>
+          <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
+          <td style="color:#555">${x.description||"—"}</td>
+          <td><button class="btn-d" onclick="del('hub_taxi_costs','${x.id}')">✕</button></td>
+        </tr>`).join("")}</tbody>
+      </table></div>`}
+    </div>
+  </div>
+
+  ${modal==="taxi-in"?modalForm("RECEITA DO TÁXI","taxi-in",[
+    {id:"date",label:"Data",type:"date",val:today()},
+    {id:"type",label:"Tipo",type:"select",opts:["Diária (15.000 Kz)","Manutenção (reserva)","Caixa Segurança","Pagamento Motorista","Outro"]},
+    {id:"amount",label:"Valor (Kz)",type:"number",placeholder:"ex: 15000"},
+    {id:"notes",label:"Notas",type:"text",placeholder:"Opcional..."},
+  ],async()=>{
+    const d=gv("date"),t=gv("type"),a=parseFloat(gv("amount")||0),n=gv("notes");
+    if(!a)return alert("Valor obrigatório.");
+    await saveDoc("hub_taxi",{id:uid(),date:d,type:t,amount:a,notes:n});
+    modal=null;render();
+  }):""}
+  ${modal==="taxi-cost"?modalForm("CUSTO DO TÁXI","taxi-cost",[
+    {id:"date",label:"Data",type:"date",val:today()},
+    {id:"category",label:"Categoria",type:"select",opts:COST_CATS},
+    {id:"amount",label:"Valor (Kz)",type:"number",placeholder:"ex: 50000"},
+    {id:"description",label:"Descrição",type:"text",placeholder:"ex: Compra pneus dianteiros"},
+  ],async()=>{
+    const d=gv("date"),c=gv("category"),a=parseFloat(gv("amount")||0),desc=gv("description");
+    if(!a||!c)return alert("Categoria e valor obrigatórios.");
+    await saveDoc("hub_taxi_costs",{id:uid(),date:d,category:c,amount:a,description:desc});
+    modal=null;render();
+  }):""}`;
+}
+
+// ── IMPORTAÇÃO ─────────────────────────────────────────────────────
+function pageImportacao() {
+  const imports = [...db.hub_imports].sort((a,b)=>new Date(b.orderDate)-new Date(a.orderDate));
+  const totalInvested = imports.reduce((s,i)=>s+Number(i.totalCostKz||0),0);
+  const totalRevenue  = imports.filter(i=>i.status==="vendido").reduce((s,i)=>s+Number(i.saleKz||0),0);
+  const totalProfit   = imports.filter(i=>i.status==="vendido").reduce((s,i)=>s+Number(i.profitKz||0),0);
+  const pending       = imports.filter(i=>i.status!=="vendido").length;
+
+  const STATUS_COLORS = {pedido:"#7eb8f7",em_transito:"#c9a84c",na_redirecionadora:"#c084fc",em_angola:"#ff7850",vendido:"#50c878"};
+  const STATUS_LABELS = {pedido:"Pedido",em_transito:"Em Trânsito",na_redirecionadora:"Na Redirecionadora",em_angola:"Em Angola",vendido:"Vendido"};
+
+  return `
+  <div class="grid4" style="margin-bottom:20px">
+    ${sc("Total Investido", fKz(totalInvested),"#ff7850","▼")}
+    ${sc("Total Receita", fKz(totalRevenue),"#50c878","▲")}
+    ${sc("Lucro Total", fKz(totalProfit), totalProfit>=0?"#c9a84c":"#ff5050","◆")}
+    ${sc("Em Curso", pending,"#7eb8f7","◈")}
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div class="sec-title" style="margin:0">Encomendas</div>
+      <button class="btn-p" onclick="openModal('import')">+ NOVA ENCOMENDA</button>
+    </div>
+    ${imports.length===0?empty("Sem encomendas. Regista a tua primeira importação."):`
+    <div style="overflow-x:auto"><table class="tbl">
+      <thead><tr><th>Data</th><th>Produto</th><th>Custo Total</th><th>Venda</th><th>Lucro</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${imports.map(i=>`<tr>
+        <td>${fDate(i.orderDate)}</td>
+        <td style="font-weight:700;color:#e8e4d9">${i.product}</td>
+        <td style="color:#ff7850">${fKz(i.totalCostKz)}</td>
+        <td style="color:#50c878">${i.saleKz?fKz(i.saleKz):"—"}</td>
+        <td style="color:${Number(i.profitKz||0)>=0?"#c9a84c":"#ff5050"};font-weight:700">${i.profitKz?fKz(i.profitKz):"—"}</td>
+        <td><span style="font-size:10px;padding:3px 8px;border-radius:2px;background:${STATUS_COLORS[i.status]||"#555"}22;color:${STATUS_COLORS[i.status]||"#555"}">${STATUS_LABELS[i.status]||i.status}</span></td>
+        <td><button class="btn-d" onclick="del('hub_imports','${i.id}')">✕</button></td>
+      </tr>`).join("")}
+      </tbody>
+    </table></div>`}
+  </div>
+
+  ${modal==="import"?importModal():""}`;
+}
+
+function importModal() {
+  const calcCosts = () => {
+    const priceUSD   = parseFloat(gv("price_usd")||0);
+    const freightUS  = parseFloat(gv("freight_us")||0);
+    const freightAO  = parseFloat(gv("freight_ao")||0);
+    const rateUSDT   = parseFloat(gv("rate_usdt_usd")||1.01454545);
+    const rateKz     = parseFloat(gv("rate_kz")||1157);
+    const marketing  = parseFloat(gv("marketing")||0);
+    const packaging  = parseFloat(gv("packaging")||0);
+    const saleKz     = parseFloat(gv("sale_kz")||0);
+    const agt        = priceUSD * 0.16; // 16% of product price only
+    const totalUSD   = priceUSD + freightUS + freightAO + agt;
+    const totalUSDT  = totalUSD * rateUSDT;
+    const totalKz    = totalUSDT * rateKz + marketing + packaging;
+    const profit     = saleKz - totalKz;
+    document.getElementById("calc-agt")&&(document.getElementById("calc-agt").textContent=fUSD(agt));
+    document.getElementById("calc-total-usd")&&(document.getElementById("calc-total-usd").textContent=fUSD(totalUSD));
+    document.getElementById("calc-total-kz")&&(document.getElementById("calc-total-kz").textContent=fKz(totalKz));
+    document.getElementById("calc-profit")&&(document.getElementById("calc-profit").textContent=fKz(profit));
+    document.getElementById("calc-profit")&&(document.getElementById("calc-profit").style.color=profit>=0?"#50c878":"#ff5050");
+  };
+
+  return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()" style="max-width:540px">
+    <div class="modal-title">NOVA ENCOMENDA — IMPORTAÇÃO</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="field full"><label>Produto</label><input id="m-product" placeholder="ex: iPhone 14 Pro 256GB Space Black"/></div>
+      <div class="field"><label>Data do Pedido</label><input type="date" id="m-orderDate" value="${today()}"/></div>
+      <div class="field"><label>Estado</label>
+        <select id="m-status">
+          <option value="pedido">Pedido</option>
+          <option value="em_transito">Em Trânsito</option>
+          <option value="na_redirecionadora">Na Redirecionadora</option>
+          <option value="em_angola">Em Angola</option>
+          <option value="vendido">Vendido</option>
+        </select>
+      </div>
+
+      <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">CUSTOS</div>
+
+      <div class="field"><label>Preço no eBay (USD)</label><input type="number" id="m-price_usd" placeholder="ex: 280" oninput="calcImport()"/></div>
+      <div class="field"><label>Frete eBay → Redirecionadora (USD)</label><input type="number" id="m-freight_us" placeholder="0 se grátis" oninput="calcImport()"/></div>
+      <div class="field"><label>Frete Redirecionadora → Angola (USD)</label><input type="number" id="m-freight_ao" placeholder="ex: 17.41" oninput="calcImport()"/></div>
+      <div class="field"><label>Taxa AGT (16% do produto) — calculada</label><div class="computed" id="calc-agt">$0.00</div></div>
+      <div class="field"><label>Taxa USDT/USD (spread Bybit)</label><input type="number" id="m-rate_usdt_usd" placeholder="1.01454545" value="1.01454545" step="0.00001" oninput="calcImport()"/></div>
+      <div class="field"><label>Taxa USDT/Kz</label><input type="number" id="m-rate_kz" placeholder="1157" value="1157" oninput="calcImport()"/></div>
+      <div class="field"><label>Tráfego Pago (Kz)</label><input type="number" id="m-marketing" placeholder="ex: 5000" oninput="calcImport()"/></div>
+      <div class="field"><label>Sacolas / Embalagem (Kz)</label><input type="number" id="m-packaging" placeholder="ex: 2000" oninput="calcImport()"/></div>
+
+      <div style="grid-column:1/-1;background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+          <div><span style="color:#555">Total USD (produto+frete+AGT):</span><br><span id="calc-total-usd" style="color:#7eb8f7;font-weight:700">$0.00</span></div>
+          <div><span style="color:#555">Custo Total em Kz:</span><br><span id="calc-total-kz" style="color:#ff7850;font-weight:700">0,00 Kz</span></div>
+        </div>
+      </div>
+
+      <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">VENDA</div>
+      <div class="field"><label>Preço de Venda (Kz)</label><input type="number" id="m-sale_kz" placeholder="ex: 470000" oninput="calcImport()"/></div>
+      <div class="field"><label>Lucro Previsto</label><div class="computed" id="calc-profit" style="font-size:16px">0,00 Kz</div></div>
+      <div class="field full"><label>Notas</label><input id="m-notes" placeholder="Opcional..."/></div>
+    </div>
+    <div style="display:flex;gap:12px;margin-top:16px">
+      <button class="btn-p" style="flex:1" onclick="saveImport()">GUARDAR</button>
+      <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+    </div>
+  </div></div>`;
+}
+
+window.calcImport = function() {
+  const priceUSD   = parseFloat(document.getElementById("m-price_usd")?.value||0);
+  const freightUS  = parseFloat(document.getElementById("m-freight_us")?.value||0);
+  const freightAO  = parseFloat(document.getElementById("m-freight_ao")?.value||0);
+  const rateUSDT   = parseFloat(document.getElementById("m-rate_usdt_usd")?.value||1.01454545);
+  const rateKz     = parseFloat(document.getElementById("m-rate_kz")?.value||1157);
+  const marketing  = parseFloat(document.getElementById("m-marketing")?.value||0);
+  const packaging  = parseFloat(document.getElementById("m-packaging")?.value||0);
+  const saleKz     = parseFloat(document.getElementById("m-sale_kz")?.value||0);
+  const agt        = priceUSD * 0.16;
+  const totalUSD   = priceUSD + freightUS + freightAO + agt;
+  const totalUSDT  = totalUSD * rateUSDT;
+  const totalKz    = totalUSDT * rateKz + marketing + packaging;
+  const profit     = saleKz - totalKz;
+  const el = id => document.getElementById(id);
+  if(el("calc-agt")) el("calc-agt").textContent = fUSD(agt);
+  if(el("calc-total-usd")) el("calc-total-usd").textContent = fUSD(totalUSD);
+  if(el("calc-total-kz")) el("calc-total-kz").textContent = fKz(totalKz);
+  if(el("calc-profit")) { el("calc-profit").textContent = fKz(profit); el("calc-profit").style.color = profit>=0?"#50c878":"#ff5050"; }
+  window._importCalc = {priceUSD,freightUS,freightAO,rateUSDT,rateKz,marketing,packaging,saleKz,agt,totalUSD,totalUSDT,totalKz,profit};
+};
+
+window.saveImport = async function() {
+  const product  = document.getElementById("m-product")?.value?.trim();
+  const orderDate= document.getElementById("m-orderDate")?.value;
+  const status   = document.getElementById("m-status")?.value;
+  const notes    = document.getElementById("m-notes")?.value||"";
+  if(!product) return alert("Nome do produto obrigatório.");
+  calcImport();
+  const c = window._importCalc||{};
+  await saveDoc("hub_imports",{
+    id:uid(), product, orderDate, status, notes,
+    priceUSD:c.priceUSD, freightUS:c.freightUS, freightAO:c.freightAO,
+    agtUSD:c.agt, totalUSD:c.totalUSD, totalCostKz:c.totalKz,
+    saleKz:c.saleKz, profitKz:c.profit,
+    rateUsdtUsd:c.rateUSDT, rateKz:c.rateKz,
+    marketing:c.marketing, packaging:c.packaging,
+  });
+  modal=null; render();
+};
+
+// ── CUSTÓDIA ───────────────────────────────────────────────────────
+function pageCustodia() {
+  const active   = db.hub_custody.filter(x=>!x.returned);
+  const returned = db.hub_custody.filter(x=>x.returned);
+  const totalAtivo = active.reduce((s,x)=>s+Number(x.amount||0),0);
+
+  return `
+  <div class="grid4" style="margin-bottom:20px">
+    ${sc("Em Custódia (ativo)", fKz(totalAtivo),"#ff7850","🔒")}
+    ${sc("Nº de Pessoas", active.length,"#7eb8f7","◉")}
+    ${sc("Já Devolvido", fKz(returned.reduce((s,x)=>s+Number(x.amount||0),0)),"#50c878","✓")}
+    ${sc("Total Recebido", fKz(db.hub_custody.reduce((s,x)=>s+Number(x.amount||0),0)),"#c9a84c","◈")}
+  </div>
+
+  <div style="background:rgba(255,120,80,0.05);border:1px solid rgba(255,120,80,0.2);border-radius:2px;padding:14px;margin-bottom:20px;font-size:12px;color:#888;line-height:1.8">
+    ⚠️ O dinheiro em custódia <strong style="color:#ff7850">não é teu</strong> — está contabilizado nas tuas contas mas excluído do cálculo do teu património real.
+    Quando usas dinheiro de custódia para investir no negócio, regista um movimento de saída aqui.
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div class="sec-title" style="margin:0">Dinheiro Guardado de Terceiros</div>
+      <button class="btn-p" onclick="openModal('custody')">+ REGISTAR</button>
+    </div>
+    ${active.length===0?empty("Nenhum depósito em custódia activo."):`
+    <div style="overflow-x:auto"><table class="tbl">
+      <thead><tr><th>Pessoa</th><th>Valor</th><th>Data Entrada</th><th>Conta</th><th>Utilizado no Negócio</th><th>Notas</th><th></th></tr></thead>
+      <tbody>${active.map(x=>`<tr>
+        <td style="font-weight:700;color:#e8e4d9">${x.person}</td>
+        <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
+        <td>${fDate(x.date)}</td>
+        <td style="color:#777">${x.account||"—"}</td>
+        <td>${x.usedInBusiness?`<span style="color:#c9a84c">Sim — ${fKz(x.usedAmount||0)}</span>`:'<span style="color:#555">Não</span>'}</td>
+        <td style="color:#555;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.notes||"—"}</td>
+        <td style="display:flex;gap:4px">
+          <button class="btn-d" style="color:#50c878;border-color:#50c87844" onclick="markReturned('${x.id}')">✓</button>
+          <button class="btn-d" onclick="del('hub_custody','${x.id}')">✕</button>
+        </td>
+      </tr>`).join("")}
+      </tbody>
+    </table></div>`}
+    ${returned.length>0?`
+    <div style="margin-top:16px;opacity:.5">
+      <div class="sec-title" style="color:#555">Já Devolvidos</div>
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Pessoa</th><th>Valor</th><th>Data</th></tr></thead>
+        <tbody>${returned.map(x=>`<tr>
+          <td>${x.person}</td><td style="color:#50c878">${fKz(x.amount)}</td><td>${fDate(x.date)}</td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+    </div>`:""}
+  </div>
+
+  ${modal==="custody"?modalForm("REGISTAR CUSTÓDIA","custody",[
+    {id:"person",label:"Nome da Pessoa",type:"text",placeholder:"ex: Tio Manuel"},
+    {id:"amount",label:"Valor (Kz)",type:"number",placeholder:"ex: 200000"},
+    {id:"date",label:"Data de Entrada",type:"date",val:today()},
+    {id:"account",label:"Conta onde ficou guardado",type:"select",opts:["BFA","BAI","Multicaixa Express","PayPay","Dinheiro em mão"]},
+    {id:"notes",label:"Notas",type:"text",placeholder:"ex: Vai pedir daqui a 2 semanas"},
+  ],async()=>{
+    const person=gv("person"),amount=parseFloat(gv("amount")||0),date=gv("date"),account=gv("account"),notes=gv("notes");
+    if(!person||!amount)return alert("Nome e valor obrigatórios.");
+    await saveDoc("hub_custody",{id:uid(),person,amount,date,account,notes,returned:false,usedInBusiness:false});
+    modal=null;render();
+  }):""}`;
+}
+
+window.markReturned = async function(id) {
+  if(!confirm("Marcar como devolvido?")) return;
+  const item = db.hub_custody.find(x=>x.id===id);
+  if(item) await saveDoc("hub_custody",{...item,returned:true});
+};
+
+// ── CALCULADORA IMPORTAÇÃO ─────────────────────────────────────────
+function pageCalculadora() {
+  return `
+  <div class="card" style="max-width:600px;margin:0 auto">
+    <div class="sec-title">Calculadora de Importação — iPhone / eBay</div>
+    <div style="font-size:11px;color:#555;margin-bottom:20px">Descobre o preço máximo a pagar no eBay para atingires o lucro desejado.</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px">
+      <div class="field"><label>Taxa USDT/USD (Bybit)</label><input type="number" id="c-rate-usd" value="1.01454545" step="0.00001" oninput="runCalc()"/></div>
+      <div class="field"><label>Taxa USDT/Kz</label><input type="number" id="c-rate-kz" value="1157" oninput="runCalc()"/></div>
+      <div class="field"><label>Frete eBay → Redirecionadora (USD)</label><input type="number" id="c-freight-us" placeholder="0 se grátis" oninput="runCalc()"/></div>
+      <div class="field"><label>Frete Global Shopaholics → Angola (USD)</label><input type="number" id="c-freight-ao" placeholder="ex: 17.41" oninput="runCalc()"/></div>
+      <div class="field"><label>Tráfego Pago (Kz)</label><input type="number" id="c-marketing" placeholder="ex: 5000" oninput="runCalc()"/></div>
+      <div class="field"><label>Embalagem / Sacolas (Kz)</label><input type="number" id="c-packaging" placeholder="ex: 2000" oninput="runCalc()"/></div>
+    </div>
+
+    <div style="border-top:1px solid #1a1a2e;padding-top:16px;margin-bottom:16px">
+      <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:12px">CENÁRIO DE VENDA</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="field"><label>Preço de Venda Pretendido (Kz)</label><input type="number" id="c-sale" placeholder="ex: 470000" oninput="runCalc()"/></div>
+        <div class="field"><label>Lucro Desejado (Kz)</label><input type="number" id="c-profit" placeholder="ex: 100000" oninput="runCalc()"/></div>
+      </div>
+    </div>
+
+    <div id="calc-result" style="background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:20px">
+      <div style="text-align:center;color:#444;font-size:12px;letter-spacing:2px">PREENCHE OS CAMPOS ACIMA</div>
+    </div>
+  </div>`;
+}
+
+window.runCalc = function() {
+  const rateUSD  = parseFloat(document.getElementById("c-rate-usd")?.value||1.01454545);
+  const rateKz   = parseFloat(document.getElementById("c-rate-kz")?.value||1157);
+  const freightUS= parseFloat(document.getElementById("c-freight-us")?.value||0);
+  const freightAO= parseFloat(document.getElementById("c-freight-ao")?.value||0);
+  const marketing= parseFloat(document.getElementById("c-marketing")?.value||0);
+  const packaging= parseFloat(document.getElementById("c-packaging")?.value||0);
+  const saleKz   = parseFloat(document.getElementById("c-sale")?.value||0);
+  const profitKz = parseFloat(document.getElementById("c-profit")?.value||0);
+
+  if(!saleKz&&!profitKz) return;
+
+  // max cost in Kz = sale - desired profit
+  const maxCostKz   = saleKz - profitKz;
+  // subtract marketing and packaging
+  const maxCostUSDT = (maxCostKz - marketing - packaging) / rateKz;
+  const maxCostUSD  = maxCostUSDT / rateUSD;
+  // subtract frights and AGT from total USD to get max product price
+  // total = priceUSD + priceUSD*0.16 + freightUS + freightAO
+  // total = priceUSD*1.16 + freights
+  const maxProductUSD = (maxCostUSD - freightUS - freightAO) / 1.16;
+  const agtUSD = maxProductUSD * 0.16;
+
+  const el = document.getElementById("calc-result");
+  if(!el) return;
+
+  if(maxProductUSD<=0) {
+    el.innerHTML = `<div style="text-align:center;color:#ff5050;font-size:12px">❌ Com estes valores não é possível obter lucro. Aumenta o preço de venda ou reduz o lucro desejado.</div>`;
+    return;
+  }
+
+  el.innerHTML = `
+  <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:14px">RESULTADO</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+    <div style="background:#111;border:1px solid #1a1a2e;padding:12px;border-radius:2px;text-align:center">
+      <div style="font-size:10px;color:#555;letter-spacing:1px;margin-bottom:6px">PREÇO MÁXIMO NO EBAY</div>
+      <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#50c878">${fUSD(maxProductUSD)}</div>
+    </div>
+    <div style="background:#111;border:1px solid #1a1a2e;padding:12px;border-radius:2px;text-align:center">
+      <div style="font-size:10px;color:#555;letter-spacing:1px;margin-bottom:6px">CUSTO TOTAL EM KZ</div>
+      <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#ff7850">${fKz(maxCostKz)}</div>
+    </div>
+  </div>
+  <div style="font-size:11px;color:#666;line-height:2">
+    <div style="display:flex;justify-content:space-between"><span>Produto (máximo):</span><span style="color:#e8e4d9">${fUSD(maxProductUSD)}</span></div>
+    <div style="display:flex;justify-content:space-between"><span>AGT (16% do produto):</span><span style="color:#ff7850">${fUSD(agtUSD)}</span></div>
+    <div style="display:flex;justify-content:space-between"><span>Frete eBay → Redirecionadora:</span><span>${fUSD(freightUS)}</span></div>
+    <div style="display:flex;justify-content:space-between"><span>Frete → Angola:</span><span>${fUSD(freightAO)}</span></div>
+    <div style="display:flex;justify-content:space-between;border-top:1px solid #1a1a2e;margin-top:6px;padding-top:6px"><span>Total USD:</span><span style="color:#7eb8f7">${fUSD(maxProductUSD+agtUSD+freightUS+freightAO)}</span></div>
+    <div style="display:flex;justify-content:space-between"><span>Tráfego + Embalagem:</span><span style="color:#ff7850">${fKz(marketing+packaging)}</span></div>
+    <div style="display:flex;justify-content:space-between;border-top:1px solid #1a1a2e;margin-top:6px;padding-top:6px;font-weight:700"><span>Lucro:</span><span style="color:#50c878">${fKz(profitKz||saleKz-maxCostKz)}</span></div>
+  </div>`;
+};
+
+// ══════════════════════════════════════════════════════════════════
+//  UI HELPERS
+// ══════════════════════════════════════════════════════════════════
+function sc(label,value,color,icon) {
+  return `<div class="stat-card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="font-size:10px;color:#555;letter-spacing:2px;margin-bottom:8px;text-transform:uppercase">${label}</div>
+        <div style="font-size:16px;font-weight:700;color:${color};font-family:'Syne',sans-serif">${value}</div>
+      </div>
+      <div style="font-size:18px;color:${color};opacity:.35">${icon}</div>
+    </div>
+  </div>`;
+}
+
+function empty(txt="Sem registos") {
+  return `<div style="text-align:center;padding:30px 0;color:#444;font-size:12px;letter-spacing:2px">${txt.toUpperCase()}</div>`;
+}
+
+function gv(id) { return document.getElementById("m-"+id)?.value||""; }
+
+function modalForm(title, type, fields, onSave) {
+  return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title">${title}</div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      ${fields.map(f=>`<div class="field">
+        <label>${f.label}</label>
+        ${f.type==="select"
+          ? `<select id="m-${f.id}">${f.opts.map(o=>`<option>${o}</option>`).join("")}</select>`
+          : `<input type="${f.type}" id="m-${f.id}" placeholder="${f.placeholder||""}" value="${f.val||""}" ${f.type==="number"?"step='0.01'":""}/>`
+        }
+      </div>`).join("")}
+    </div>
+    <div style="display:flex;gap:12px;margin-top:20px">
+      <button class="btn-p" style="flex:1" onclick="saveModal_${type}()">GUARDAR</button>
+      <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+    </div>
+  </div></div>`;
+}
+
+function openModal(t) { modal=t; render(); }
+function closeModal()  { modal=null; render(); }
+window.openModal=openModal; window.closeModal=closeModal;
+
+async function del(col,id) { if(confirm("Eliminar?")) await delDoc(col,id); }
+window.del=del;
+
+function attachAll() {
+  setStatus("online");
+  // dynamically bind save functions for modal forms
+  window.saveModal_income  = window.saveModal_income  || (()=>{});
+  window.saveModal_expense = window.saveModal_expense || (()=>{});
+  window.saveModal_taxi_in = window.saveModal_taxi_in || (()=>{});
+  window.saveModal_taxi_cost= window.saveModal_taxi_cost||(()=>{});
+  window.saveModal_custody = window.saveModal_custody || (()=>{});
+}
+
+// Bind modal saves dynamically since they're closures in page functions
+// We re-render pages and rebind via onclick strings calling global async functions
+window.saveModal_income = async function() {
+  const d=gv("date"),c=gv("category"),a=parseFloat(gv("amount")||0),desc=gv("description");
+  if(!a||!c)return alert("Preenche categoria e valor.");
+  await saveDoc("hub_income",{id:uid(),date:d,category:c,amount:a,description:desc});
+  modal=null;render();
+};
+window.saveModal_expense = async function() {
+  const d=gv("date"),c=gv("category"),a=parseFloat(gv("amount")||0),desc=gv("description");
+  if(!a||!c)return alert("Preenche categoria e valor.");
+  await saveDoc("hub_expenses",{id:uid(),date:d,category:c,amount:a,description:desc});
+  modal=null;render();
+};
+window.saveModal_taxi_in = async function() {
+  const d=gv("date"),t=gv("type"),a=parseFloat(gv("amount")||0),n=gv("notes");
+  if(!a)return alert("Valor obrigatório.");
+  await saveDoc("hub_taxi",{id:uid(),date:d,type:t,amount:a,notes:n});
+  modal=null;render();
+};
+window.saveModal_taxi_cost = async function() {
+  const d=gv("date"),c=gv("category"),a=parseFloat(gv("amount")||0),desc=gv("description");
+  if(!a||!c)return alert("Categoria e valor obrigatórios.");
+  await saveDoc("hub_taxi_costs",{id:uid(),date:d,category:c,amount:a,description:desc});
+  modal=null;render();
+};
+window.saveModal_custody = async function() {
+  const person=gv("person"),amount=parseFloat(gv("amount")||0),date=gv("date"),account=gv("account"),notes=gv("notes");
+  if(!person||!amount)return alert("Nome e valor obrigatórios.");
+  await saveDoc("hub_custody",{id:uid(),person,amount,date,account,notes,returned:false,usedInBusiness:false});
+  modal=null;render();
+};
+
+initFirebase();
+</script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@700;800&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#08080f;color:#e8e4d9;font-family:'Space Mono',monospace;min-height:100vh}
+::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:#0b0b14}::-webkit-scrollbar-thumb{background:#c9a84c55;border-radius:2px}
+#app{display:flex;min-height:100vh}
+.sidebar{width:200px;background:#0b0b14;border-right:1px solid #1c1c2e;display:flex;flex-direction:column;flex-shrink:0;z-index:50}
+.brand{padding:22px 16px 18px;border-bottom:1px solid #1c1c2e}
+.bname{display:block;font-family:'Syne',sans-serif;font-weight:800;font-size:18px;color:#c9a84c;letter-spacing:3px}
+.bsub{display:block;font-size:8px;color:#333;letter-spacing:3px;margin-top:2px}
+.nav{background:none;border:none;color:#555;cursor:pointer;padding:11px 16px;display:flex;align-items:center;gap:10px;width:100%;font-family:'Space Mono',monospace;font-size:12px;letter-spacing:.5px;transition:all .15s;border-left:2px solid transparent;text-align:left}
+.nav:hover{color:#c9a84c;background:rgba(201,168,76,.04)}
+.nav.act{color:#c9a84c;border-left-color:#c9a84c;background:rgba(201,168,76,.07)}
+.sidebar-foot{padding:14px 16px;border-top:1px solid #1c1c2e;font-size:11px}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.hdr{background:#0b0b14;border-bottom:1px solid #1c1c2e;padding:14px 24px;display:flex;align-items:center;gap:16px}
+.ptitle{font-family:'Syne',sans-serif;font-weight:800;font-size:16px;color:#e8e4d9;letter-spacing:1px}
+.pdate{font-size:10px;color:#444;letter-spacing:1px;margin-top:2px}
+.body{flex:1;padding:24px;overflow-y:auto}
+.card{background:#0f0f1a;border:1px solid #1a1a2e;border-radius:2px;padding:20px}
+.stat-card{background:#0f0f1a;border:1px solid #1a1a2e;border-radius:2px;padding:18px;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#c9a84c44,transparent)}
+.sec-title{font-size:11px;color:#c9a84c;letter-spacing:2px;margin-bottom:14px;text-transform:uppercase}
+.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #111;font-size:12px;color:#666}
+.row.bold{color:#aaa;font-weight:700}
+.btn-p{background:#c9a84c;color:#08080f;border:none;padding:8px 16px;font-family:'Space Mono',monospace;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer;transition:all .15s;border-radius:2px}
+.btn-p:hover{background:#dab85c}
+.btn-ghost{background:transparent;color:#c9a84c;border:1px solid #c9a84c44;padding:8px 16px;font-family:'Space Mono',monospace;font-size:12px;cursor:pointer;transition:all .15s;border-radius:2px}
+.btn-ghost:hover{border-color:#c9a84c;background:rgba(201,168,76,.06)}
+.btn-d{background:transparent;color:#e55;border:1px solid #e5555544;padding:4px 9px;font-family:'Space Mono',monospace;font-size:11px;cursor:pointer;transition:all .15s;border-radius:2px}
+.btn-d:hover{background:#e55;color:#fff}
+input,select,textarea{background:#0b0b14;border:1px solid #1e1e30;color:#e8e4d9;padding:9px 12px;font-family:'Space Mono',monospace;font-size:12px;width:100%;outline:none;transition:border .15s;border-radius:2px}
+input:focus,select:focus{border-color:#c9a84c55}
+select option{background:#0b0b14}
+label{font-size:10px;letter-spacing:1.5px;color:#555;display:block;margin-bottom:6px;text-transform:uppercase}
+.field{display:flex;flex-direction:column}
+.field.full{grid-column:1/-1}
+.computed{background:#0b0b14;border:1px solid #1e1e30;padding:9px 12px;color:#c9a84c;font-weight:700;font-size:14px;border-radius:2px}
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{text-align:left;padding:9px 10px;color:#c9a84c;font-size:9px;letter-spacing:2px;border-bottom:1px solid #1a1a2e;text-transform:uppercase}
+.tbl td{padding:9px 10px;border-bottom:1px solid #111;color:#aaa}
+.tbl tr:hover td{background:rgba(201,168,76,.02)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.bud-box{background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:14px;margin-bottom:10px}
+.bud-label{font-size:10px;color:#555;letter-spacing:2px;margin-bottom:6px}
+.bud-val{font-size:20px;font-weight:700;font-family:'Syne',sans-serif}
+.cat-badge{display:inline-block;padding:2px 7px;font-size:10px;border-radius:2px;letter-spacing:1px}
+.cat-badge.green{background:rgba(80,200,120,.1);color:#50c878}
+.cat-badge.red{background:rgba(255,120,80,.1);color:#ff7850}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal{background:#0f0f1a;border:1px solid #c9a84c22;border-top:2px solid #c9a84c;padding:26px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto;border-radius:2px}
+.modal-title{font-family:'Syne',sans-serif;font-weight:800;font-size:16px;color:#c9a84c;margin-bottom:20px}
+.ham{display:none;background:none;border:1px solid #c9a84c44;color:#c9a84c;padding:7px 11px;cursor:pointer;font-size:15px;border-radius:2px}
+.veil{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:49}
+.veil.show{display:block}
+@media(max-width:900px){.grid4{grid-template-columns:1fr 1fr!important}.grid2{grid-template-columns:1fr!important}}
+@media(max-width:640px){
+  .sidebar{position:fixed;left:-204px;top:0;bottom:0;transition:left .25s}
+  .sidebar.open{left:0}
+  .ham{display:block}
+  .grid4{grid-template-columns:1fr 1fr!important}
+  .body{padding:16px}
+}
+</style>
+</head>
+<body>
+<div id="app"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#555;letter-spacing:3px;font-size:12px">A CARREGAR...</div></div>
+</body>
+</html>

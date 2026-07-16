@@ -1,0 +1,14 @@
+{
+  "hosting": [
+    {
+      "site": "kambio-business",
+      "public": "kambio",
+      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+    },
+    {
+      "site": "grupo-kambio-hub",
+      "public": "hub",
+      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+    }
+  ]
+}

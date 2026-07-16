@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kâmbio Business PRO</title>
+
+<!-- Firebase SDK -->
+<script type="module">
+import { initializeApp }          from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, enableIndexedDbPersistence }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// ══════════════════════════════════════════════════════════════════
+//  🔧 CONFIGURAÇÃO FIREBASE — substitui pelos teus valores
+//  (ver guia abaixo)
+// ══════════════════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey:            "AIzaSyD_dc1z0cLy0cqrtQhy52AuRnFosCtKANQ",
+  authDomain:        "kambio-business.firebaseapp.com",
+  projectId:         "kambio-business",
+  storageBucket:     "kambio-business.firebasestorage.app",
+  messagingSenderId: "830662712719",
+  appId:             "1:830662712719:web:abc695b03a706217ebbffa"
+};
+// ══════════════════════════════════════════════════════════════════
+
+const COLLECTIONS = ["lots","sales","clients","affiliates","suppliers","accounts","wallets"];
+const DEFAULT_WALLETS  = ["RedotPay","Binance","Bybit","Kast","Grey"];
+const DEFAULT_ACCOUNTS = ["BFA","BAI","Multicaixa Express (Avó/Irmãos)","PayPay"];
+
+let app, db_fire;
+let db = { lots:[], sales:[], clients:[], affiliates:[], suppliers:[], accounts:[], wallets:[] };
+let unsubscribers = [];
+
+// ── LOCAL FALLBACK (quando Firebase não está configurado) ──────────
+const LOCAL_KEY = "kambio_pro_local";
+const isConfigured = () => !firebaseConfig.apiKey.includes("COLE_AQUI");
+
+function localLoad() {
+  try { return JSON.parse(localStorage.getItem(LOCAL_KEY)) || db; } catch { return db; }
+}
+function localSave() {
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(db));
+}
+
+// ── FIREBASE INIT ──────────────────────────────────────────────────
+async function initFirebase() {
+  if (!isConfigured()) {
+    console.warn("Firebase não configurado — usando localStorage.");
+    db = localLoad();
+    seedDefaults();
+    render();
+    setStatus("offline-local");
+    return;
+  }
+  try {
+    app = initializeApp(firebaseConfig);
+    db_fire = getFirestore(app);
+    await enableIndexedDbPersistence(db_fire).catch(()=>{});
+    setStatus("connecting");
+    COLLECTIONS.forEach(col => {
+      const unsub = onSnapshot(collection(db_fire, col), snap => {
+        db[col] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        seedDefaults();
+        render();
+        setStatus("online");
+      }, () => { setStatus("offline"); });
+      unsubscribers.push(unsub);
+    });
+  } catch(e) {
+    console.error(e);
+    db = localLoad();
+    seedDefaults();
+    render();
+    setStatus("error");
+  }
+}
+
+// ── CRUD ───────────────────────────────────────────────────────────
+async function saveDoc(col, item) {
+  const id = item.id ? String(item.id) : String(Date.now());
+  const data = { ...item, id };
+  if (!isConfigured()) {
+    db[col] = [...db[col].filter(x=>String(x.id)!==id), data];
+    localSave(); render(); return id;
+  }
+  await setDoc(doc(db_fire, col, id), data);
+  return id;
+}
+
+async function delDoc(col, id) {
+  if (!isConfigured()) {
+    db[col] = db[col].filter(x=>String(x.id)!==String(id));
+    localSave(); render(); return;
+  }
+  await deleteDoc(doc(db_fire, col, String(id)));
+}
+
+async function bulkSave(updates) {
+  // updates: [{col, item}]
+  for (const u of updates) await saveDoc(u.col, u.item);
+}
+
+// ── SEED DEFAULTS ──────────────────────────────────────────────────
+let seeded = false;
+async function seedDefaults() {
+  if (seeded) return;
+  if (db.wallets.length === 0) {
+    for (const [i,n] of DEFAULT_WALLETS.entries())
+      await saveDoc("wallets", {id: i+1, name:n, balance:0});
+  }
+  if (db.accounts.length === 0) {
+    for (const [i,n] of DEFAULT_ACCOUNTS.entries())
+      await saveDoc("accounts", {id: i+1, name:n, balance:0});
+  }
+  seeded = true;
+}
+
+// ── STATUS INDICATOR ───────────────────────────────────────────────
+function setStatus(s) {
+  const el = document.getElementById("sync-status");
+  if (!el) return;
+  const map = {
+    online:        ["🟢","SINCRONIZADO","#50c878"],
+    offline:       ["🟡","OFFLINE (dados locais)","#c9a84c"],
+    connecting:    ["🔵","A LIGAR...","#7eb8f7"],
+    "offline-local":["⚪","LOCAL (sem Firebase)","#888"],
+    error:         ["🔴","ERRO DE LIGAÇÃO","#ff5050"],
+  };
+  const [icon, label, color] = map[s]||map.error;
+  el.innerHTML = `<span style="font-size:9px;letter-spacing:1px;color:${color}">${icon} ${label}</span>`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  UI STATE
+// ══════════════════════════════════════════════════════════════════
+let currentPage = "dashboard";
+let modalState  = null; // {type, data}
+
+const fKz   = v => `${Number(v||0).toLocaleString("pt-AO",{minimumFractionDigits:2,maximumFractionDigits:2})} Kz`;
+const fU    = v => `${Number(v||0).toFixed(4)} USDT`;
+const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
+const today = () => new Date().toISOString().split("T")[0];
+const uid   = () => Date.now();
+
+const PAGES = [
+  {id:"dashboard","label":"Dashboard",icon:"▣"},
+  {id:"buy","label":"Comprar",icon:"↓"},
+  {id:"sell","label":"Vender",icon:"↑"},
+  {id:"stock","label":"Stock",icon:"◈"},
+  {id:"clients","label":"Clientes",icon:"◉"},
+  {id:"ranking","label":"Ranking",icon:"★"},
+  {id:"affiliates","label":"Afiliados",icon:"◎"},
+  {id:"wallets","label":"Carteiras",icon:"◆"},
+  {id:"financial","label":"Financeiro",icon:"⊕"},
+  {id:"settings","label":"Definições",icon:"⚙"},
+];
+
+// ── RENDER LOOP ────────────────────────────────────────────────────
+function render() {
+  const app = document.getElementById("app");
+  if (!app) return;
+  app.innerHTML = buildLayout();
+  attachEvents();
+}
+
+function buildLayout() {
+  return `
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-name">KÂMBIO</span>
+      <span class="brand-sub">BUSINESS · PRO</span>
+    </div>
+    <nav>
+      ${PAGES.map(p=>`
+        <button class="nav${currentPage===p.id?" act":""}" onclick="navigate('${p.id}')">
+          <span style="font-size:15px;width:20px;flex-shrink:0">${p.icon}</span>
+          <span>${p.label}</span>
+        </button>`).join("")}
+    </nav>
+    <div class="quick-bal">
+      <div style="color:#555;letter-spacing:2px;margin-bottom:8px;font-size:10px">SALDO RÁPIDO</div>
+      <div class="qrow"><span>USDT Total</span><span style="color:#7eb8f7;font-weight:700">${fU(db.wallets.reduce((s,w)=>s+Number(w.balance||0),0))}</span></div>
+      <div class="qrow"><span>Kz Total</span><span style="color:#c9a84c;font-weight:700">${fKz(db.accounts.reduce((s,a)=>s+Number(a.balance||0),0))}</span></div>
+      <div id="sync-status" style="margin-top:8px"></div>
+    </div>
+  </aside>
+  <div class="veil" id="veil" onclick="closeMenu()"></div>
+  <div class="main">
+    <header class="header">
+      <button class="ham" onclick="toggleMenu()">☰</button>
+      <div>
+        <div class="page-title">${PAGES.find(p=>p.id===currentPage)?.label||""}</div>
+        <div class="page-date">${new Date().toLocaleDateString("pt-AO",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div>
+      </div>
+    </header>
+    <div class="body">
+      ${buildPage()}
+      ${modalState ? buildModal() : ""}
+    </div>
+  </div>`;
+}
+
+function navigate(p) { currentPage=p; closeMenu(); render(); }
+function toggleMenu() {
+  document.getElementById("sidebar")?.classList.toggle("open");
+  document.getElementById("veil")?.classList.toggle("show");
+}
+function closeMenu() {
+  document.getElementById("sidebar")?.classList.remove("open");
+  document.getElementById("veil")?.classList.remove("show");
+}
+window.navigate = navigate;
+window.toggleMenu = toggleMenu;
+window.closeMenu = closeMenu;
+
+// ══════════════════════════════════════════════════════════════════
+//  PAGES
+// ══════════════════════════════════════════════════════════════════
+function buildPage() {
+  switch(currentPage) {
+    case "dashboard":  return pageDashboard();
+    case "buy":        return pageBuy();
+    case "sell":       return pageSell();
+    case "stock":      return pageStock();
+    case "clients":    return pageClients();
+    case "ranking":    return pageRanking();
+    case "affiliates": return pageAffiliates();
+    case "wallets":    return pageWallets();
+    case "financial":  return pageFinancial();
+    case "settings":   return pageSettings();
+    default: return "";
+  }
+}
+
+// ── DASHBOARD ──────────────────────────────────────────────────────
+function pageDashboard() {
+  const now = new Date();
+  const todayStr = today();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const todayP = db.sales.filter(s=>s.date===todayStr).reduce((s,x)=>s+Number(x.totalProfit||0),0);
+  const monthP = db.sales.filter(s=>new Date(s.date)>=monthStart).reduce((s,x)=>s+Number(x.totalProfit||0),0);
+  const totalP = db.sales.reduce((s,x)=>s+Number(x.totalProfit||0),0);
+  const lotStock = db.lots.filter(l=>Number(l.remaining||0)>0).reduce((s,l)=>s+Number(l.remaining||0),0);
+  const recent = [...db.sales].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,5);
+  const topC = topClientMonth();
+  const suggest = monthP*0.20;
+
+  return `
+  <div class="grid4" style="margin-bottom:20px">
+    ${statCard("Lucro Hoje", fKz(todayP), todayP>=0?"#50c878":"#ff5050","▲")}
+    ${statCard("Lucro do Mês", fKz(monthP),"#c9a84c","◆")}
+    ${statCard("Lucro Total", fKz(totalP),"#c9a84c","★")}
+    ${statCard("Stock Disponível", fU(lotStock),"#7eb8f7","◈")}
+  </div>
+  <div class="grid2" style="margin-bottom:20px">
+    <div class="card">
+      <div class="sec-title">Carteiras USDT</div>
+      ${db.wallets.map(w=>`<div class="row"><span>${w.name}</span><span style="color:#7eb8f7;font-weight:700">${fU(w.balance)}</span></div>`).join("")}
+      <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+        <div class="row bold"><span>TOTAL</span><span style="color:#7eb8f7">${fU(db.wallets.reduce((s,w)=>s+Number(w.balance||0),0))}</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="sec-title">Contas em Kwanzas</div>
+      ${db.accounts.map(a=>`<div class="row"><span>${a.name}</span><span style="color:#c9a84c;font-weight:700">${fKz(a.balance)}</span></div>`).join("")}
+      <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+        <div class="row bold"><span>TOTAL</span><span style="color:#c9a84c">${fKz(db.accounts.reduce((s,a)=>s+Number(a.balance||0),0))}</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <div class="sec-title">Últimas Vendas</div>
+      ${recent.length===0?'<div class="empty">SEM VENDAS</div>':`
+      <table class="tbl"><thead><tr><th>Data</th><th>USDT</th><th>Câmbio</th><th>Lucro</th></tr></thead><tbody>
+      ${recent.map(s=>`<tr>
+        <td>${fDate(s.date)}</td>
+        <td style="color:#7eb8f7">${fU(s.totalUsdt)}</td>
+        <td style="color:#c9a84c">${Number(s.rateKz).toLocaleString()} Kz</td>
+        <td style="color:${Number(s.totalProfit)>=0?"#50c878":"#ff5050"};font-weight:700">${fKz(s.totalProfit)}</td>
+      </tr>`).join("")}
+      </tbody></table>`}
+    </div>
+    <div class="card">
+      <div class="sec-title">💡 Dica Financeira</div>
+      <div style="font-size:12px;color:#888;margin-bottom:12px">Lucro deste mês: <span style="color:#c9a84c;font-weight:700">${fKz(monthP)}</span></div>
+      <div class="budget-box blue"><div class="budget-label">REINVESTIR (80%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(monthP*0.8)}</div></div>
+      <div class="budget-box green"><div class="budget-label">PODES GASTAR (20%)</div><div class="budget-val" style="color:#50c878">${fKz(suggest)}</div></div>
+      <div class="budget-box gold"><div class="budget-label">RESERVA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(monthP*0.1)}</div></div>
+      ${topC?`<div class="top-client-box">
+        <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:4px">★ CLIENTE DO MÊS</div>
+        <div style="font-weight:700;color:#e8e4d9">${topC.name}</div>
+        <div style="font-size:11px;color:#777">${fU(topC.volume)} comprados este mês</div>
+      </div>`:""}
+    </div>
+  </div>`;
+}
+
+// ── BUY PAGE ───────────────────────────────────────────────────────
+function pageBuy() {
+  const lots = [...db.lots].sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,12);
+  return `
+  <div class="grid2">
+    <div class="card">
+      <div class="sec-title">Registar Compra de USDT</div>
+      <div class="form-grid">
+        <div class="field"><label>Data *</label><input type="date" id="b-date" value="${today()}"/></div>
+        <div class="field"><label>Fornecedor</label>
+          <select id="b-sup" onchange="onSupChange()">
+            <option value="">— Seleccionar —</option>
+            ${db.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join("")}
+            <option value="__new">+ Novo fornecedor...</option>
+          </select>
+        </div>
+        <div class="field" id="b-supname-wrap" style="display:none"><label>Nome do Fornecedor *</label><input type="text" id="b-supname" placeholder="ex: João Silva"/></div>
+        <div class="field"><label>Quantidade USDT *</label><input type="number" id="b-usdt" placeholder="ex: 500" oninput="calcBuyTotal()"/></div>
+        <div class="field"><label>Câmbio de Compra (Kz/USDT) *</label><input type="number" id="b-rate" placeholder="ex: 6200" oninput="calcBuyTotal()"/></div>
+        <div class="field"><label>Total a Pagar</label><div class="computed" id="b-total">0,00 Kz</div></div>
+        <div class="field"><label>Carteira de Destino *</label>
+          <select id="b-wallet">
+            <option value="">— Seleccionar —</option>
+            ${db.wallets.map(w=>`<option value="${w.id}">${w.name} (${fU(w.balance)})</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label>Conta de Pagamento (Kz) *</label>
+          <select id="b-account">
+            <option value="">— Seleccionar —</option>
+            ${db.accounts.map(a=>`<option value="${a.id}">${a.name} (${fKz(a.balance)})</option>`).join("")}
+          </select>
+        </div>
+        <div class="field full"><label>Notas</label><input type="text" id="b-notes" placeholder="Opcional..."/></div>
+      </div>
+      <button class="btn-primary" style="width:100%;margin-top:16px" onclick="submitBuy()">REGISTAR COMPRA</button>
+    </div>
+    <div class="card">
+      <div class="sec-title">Lotes Recentes</div>
+      ${lots.length===0?'<div class="empty">SEM LOTES</div>':`
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Data</th><th>Fornecedor</th><th>USDT</th><th>Câmbio</th><th>Restante</th><th>Carteira</th></tr></thead>
+        <tbody>${lots.map(l=>{
+          const w=db.wallets.find(x=>String(x.id)===String(l.walletId));
+          return `<tr>
+            <td>${fDate(l.date)}</td>
+            <td style="font-weight:700">${l.supplierName||"—"}</td>
+            <td style="color:#7eb8f7">${fU(l.usdt)}</td>
+            <td style="color:#c9a84c">${Number(l.rateKz).toLocaleString()} Kz</td>
+            <td style="color:${Number(l.remaining)>0?"#50c878":"#555"}">${fU(l.remaining)}</td>
+            <td style="color:#777">${w?.name||"—"}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table></div>`}
+    </div>
+  </div>`;
+}
+
+window.onSupChange = function() {
+  const v = document.getElementById("b-sup")?.value;
+  const wrap = document.getElementById("b-supname-wrap");
+  if (wrap) wrap.style.display = v==="__new" ? "block" : "none";
+};
+window.calcBuyTotal = function() {
+  const u = parseFloat(document.getElementById("b-usdt")?.value)||0;
+  const r = parseFloat(document.getElementById("b-rate")?.value)||0;
+  const el = document.getElementById("b-total");
+  if (el) el.textContent = fKz(u*r);
+};
+window.submitBuy = async function() {
+  const date     = document.getElementById("b-date")?.value;
+  const supId    = document.getElementById("b-sup")?.value;
+  const supName  = supId==="__new"
+    ? document.getElementById("b-supname")?.value?.trim()
+    : (db.suppliers.find(s=>String(s.id)===supId)?.name||"Fornecedor");
+  const usdt     = parseFloat(document.getElementById("b-usdt")?.value)||0;
+  const rate     = parseFloat(document.getElementById("b-rate")?.value)||0;
+  const walletId = document.getElementById("b-wallet")?.value;
+  const accountId= document.getElementById("b-account")?.value;
+  const notes    = document.getElementById("b-notes")?.value||"";
+
+  if (!usdt||!rate||!walletId||!accountId||!supName) return alert("Preenche todos os campos obrigatórios.");
+
+  const lot = {
+    id: uid(), date, supplierName: supName,
+    usdt, rateKz: rate, totalKz: usdt*rate,
+    walletId: String(walletId), remaining: usdt,
+    notes, createdAt: new Date().toISOString(),
+  };
+
+  // save new supplier if new
+  if (supId==="__new" && supName) await saveDoc("suppliers",{id:uid(),name:supName,phone:""});
+
+  const wallet  = db.wallets.find(w=>String(w.id)===String(walletId));
+  const account = db.accounts.find(a=>String(a.id)===String(accountId));
+
+  await bulkSave([
+    {col:"lots",   item: lot},
+    {col:"wallets",item: {...wallet,  balance: Number(wallet.balance)+usdt}},
+    {col:"accounts",item:{...account, balance: Number(account.balance)-(usdt*rate)}},
+  ]);
+  alert("✅ Compra registada! Lote criado.");
+  navigate("stock");
+};
+
+// ── SELL PAGE ──────────────────────────────────────────────────────
+let sellLots = []; // [{uid, lotId, usdt}]
+
+function pageSell() {
+  const availLots = db.lots.filter(l=>Number(l.remaining||0)>0).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const rate = parseFloat(document.getElementById("s-rate")?.value)||0;
+
+  let totalUsdt=0, totalRevenue=0, totalProfit=0;
+  const breakdown = sellLots.map(entry=>{
+    const lot = db.lots.find(l=>String(l.id)===String(entry.lotId));
+    if(!lot||!entry.usdt) return null;
+    const u = Number(entry.usdt);
+    const profit = u*(rate-Number(lot.rateKz));
+    totalUsdt+=u; totalRevenue+=u*rate; totalProfit+=profit;
+    return {lot, u, profit};
+  }).filter(Boolean);
+
+  return `
+  <div class="grid2">
+    <div class="card">
+      <div class="sec-title">Registar Venda de USDT</div>
+      <div class="form-grid">
+        <div class="field"><label>Data *</label><input type="date" id="s-date" value="${today()}"/></div>
+        <div class="field"><label>Câmbio de Venda (Kz/USDT) *</label><input type="number" id="s-rate" placeholder="ex: 6500" oninput="refreshSell()"/></div>
+        <div class="field"><label>Cliente</label>
+          <select id="s-client" onchange="document.getElementById('s-aff').value=''">
+            <option value="">— Seleccionar —</option>
+            ${db.clients.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label>Afiliado</label>
+          <select id="s-aff" onchange="document.getElementById('s-client').value=''">
+            <option value="">— Seleccionar —</option>
+            ${db.affiliates.map(a=>`<option value="${a.id}">${a.name}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label>Conta de Recebimento (Kz) *</label>
+          <select id="s-account">
+            <option value="">— Seleccionar —</option>
+            ${db.accounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label>Notas</label><input type="text" id="s-notes" placeholder="Opcional..."/></div>
+      </div>
+
+      <div style="margin-top:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:11px;color:#c9a84c;letter-spacing:2px">LOTES A USAR</div>
+          <button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="addSellLot()">+ LOTE</button>
+        </div>
+        ${sellLots.length===0?'<div style="font-size:12px;color:#444;padding:8px 0">Clica em "+ LOTE" para seleccionar o stock a vender.</div>':""}
+        <div id="sell-lots-wrap">
+          ${sellLots.map(entry=>{
+            const lot=db.lots.find(l=>String(l.id)===String(entry.lotId));
+            const spread = lot&&rate ? fKz((rate-Number(lot.rateKz))*Number(entry.usdt||0)) : "—";
+            const spreadColor = lot&&rate&&(rate-Number(lot.rateKz))>=0?"#50c878":"#ff5050";
+            return `
+            <div class="lot-entry" id="le-${entry.uid}">
+              <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
+                <div><label>Lote</label>
+                  <select onchange="updateSellLot('${entry.uid}','lotId',this.value)">
+                    <option value="">— Seleccionar —</option>
+                    ${availLots.map(l=>`<option value="${l.id}" ${String(l.id)===String(entry.lotId)?"selected":""}>${l.supplierName} · ${Number(l.rateKz).toLocaleString()} Kz · ${fU(l.remaining)} disp.</option>`).join("")}
+                  </select>
+                </div>
+                <div><label>Qtd USDT${lot?` (max ${Number(lot.remaining).toFixed(2)})`:""}
+                </label><input type="number" min="0" step="0.01" value="${entry.usdt||""}" placeholder="ex: 200" oninput="updateSellLot('${entry.uid}','usdt',this.value)"/></div>
+                <button class="btn-danger" onclick="removeSellLot('${entry.uid}')" style="align-self:flex-end">✕</button>
+              </div>
+              ${lot&&entry.usdt&&rate?`<div style="margin-top:6px;font-size:11px;color:#666">
+                Comprado a <span style="color:#c9a84c">${Number(lot.rateKz).toLocaleString()} Kz</span> · Spread: <span style="color:${spreadColor}">${spread}</span>
+              </div>`:""}
+            </div>`;
+          }).join("")}
+        </div>
+      </div>
+      <button class="btn-primary" style="width:100%;margin-top:14px" onclick="submitSell()">REGISTAR VENDA</button>
+    </div>
+
+    <div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="sec-title">Resumo da Venda</div>
+        <div class="row"><span>Total USDT</span><span style="color:#7eb8f7;font-weight:700">${fU(totalUsdt)}</span></div>
+        <div class="row"><span>Câmbio de Venda</span><span>${rate?`${rate.toLocaleString()} Kz`:"—"}</span></div>
+        <div class="row"><span>Total a Receber</span><span style="color:#c9a84c;font-weight:700">${fKz(totalRevenue)}</span></div>
+        <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+          <div class="row bold"><span>LUCRO TOTAL</span><span style="color:${totalProfit>=0?"#50c878":"#ff5050"};font-size:15px">${fKz(totalProfit)}</span></div>
+        </div>
+      </div>
+      ${breakdown.length>0?`
+      <div class="card">
+        <div class="sec-title">Lucro por Lote</div>
+        ${breakdown.map(b=>`
+        <div class="lot-entry">
+          <div style="font-size:11px;color:#888;margin-bottom:4px">${b.lot.supplierName} · comprado a ${Number(b.lot.rateKz).toLocaleString()} Kz</div>
+          <div style="display:flex;justify-content:space-between">
+            <span style="color:#7eb8f7">${fU(b.u)}</span>
+            <span style="font-weight:700;color:${b.profit>=0?"#50c878":"#ff5050"}">${fKz(b.profit)}</span>
+          </div>
+          <div style="font-size:10px;color:#555;margin-top:2px">Spread: ${fKz(rate-Number(b.lot.rateKz))} / USDT</div>
+        </div>`).join("")}
+      </div>`:""}
+    </div>
+  </div>`;
+}
+
+window.addSellLot    = function() { sellLots.push({uid:uid(),lotId:"",usdt:""}); render(); };
+window.removeSellLot = function(u){ sellLots=sellLots.filter(l=>String(l.uid)!==String(u)); render(); };
+window.updateSellLot = function(u,k,v){ sellLots=sellLots.map(l=>String(l.uid)===String(u)?{...l,[k]:v}:l); render(); };
+window.refreshSell   = function() { render(); };
+
+window.submitSell = async function() {
+  const date      = document.getElementById("s-date")?.value;
+  const rateKz    = parseFloat(document.getElementById("s-rate")?.value)||0;
+  const clientId  = document.getElementById("s-client")?.value||null;
+  const affId     = document.getElementById("s-aff")?.value||null;
+  const accountId = document.getElementById("s-account")?.value;
+  const notes     = document.getElementById("s-notes")?.value||"";
+
+  if (!rateKz||!accountId) return alert("Câmbio de venda e conta de recebimento são obrigatórios.");
+  if (!sellLots.length||sellLots.some(l=>!l.lotId||!l.usdt)) return alert("Adiciona pelo menos um lote com quantidade.");
+
+  for (const entry of sellLots) {
+    const lot=db.lots.find(l=>String(l.id)===String(entry.lotId));
+    if (!lot||Number(entry.usdt)>Number(lot.remaining)) return alert(`Stock insuficiente no lote de ${lot?.supplierName||"?"}.`);
+  }
+
+  let totalUsdt=0, totalRevenue=0, totalProfit=0;
+  const lotEntries = sellLots.map(entry=>{
+    const lot=db.lots.find(l=>String(l.id)===String(entry.lotId));
+    const u=Number(entry.usdt); const profit=u*(rateKz-Number(lot.rateKz));
+    totalUsdt+=u; totalRevenue+=u*rateKz; totalProfit+=profit;
+    return {lotId:String(lot.id),usdt:u,buyRate:lot.rateKz,profit};
+  });
+
+  const sale = {
+    id:uid(), date, createdAt:new Date().toISOString(),
+    clientId: clientId||null, affiliateId: affId||null,
+    rateKz, totalUsdt, totalRevenue, totalProfit, lotEntries,
+    accountId: String(accountId), notes,
+  };
+
+  const updates = [{col:"sales",item:sale}];
+
+  // deduct lots and wallets
+  for (const entry of sellLots) {
+    const lot=db.lots.find(l=>String(l.id)===String(entry.lotId));
+    const newRem=Math.max(0,Number(lot.remaining)-Number(entry.usdt));
+    updates.push({col:"lots",item:{...lot,remaining:newRem}});
+    const wallet=db.wallets.find(w=>String(w.id)===String(lot.walletId));
+    if (wallet) updates.push({col:"wallets",item:{...wallet,balance:Math.max(0,Number(wallet.balance)-Number(entry.usdt))}});
+  }
+
+  // credit account
+  const account=db.accounts.find(a=>String(a.id)===String(accountId));
+  updates.push({col:"accounts",item:{...account,balance:Number(account.balance)+totalRevenue}});
+
+  await bulkSave(updates);
+  sellLots=[];
+  alert("✅ Venda registada com sucesso!");
+  navigate("financial");
+};
+
+// ── STOCK ──────────────────────────────────────────────────────────
+function pageStock() {
+  const active   = db.lots.filter(l=>Number(l.remaining||0)>0);
+  const exhausted= db.lots.filter(l=>Number(l.remaining||0)<=0);
+  return `
+  <div class="grid4" style="margin-bottom:20px">
+    ${statCard("Lotes Activos", active.length,"#50c878","◈")}
+    ${statCard("USDT Disponível", fU(active.reduce((s,l)=>s+Number(l.remaining),0)),"#7eb8f7","◆")}
+    ${statCard("Valor em Stock", fKz(active.reduce((s,l)=>s+Number(l.remaining)*Number(l.rateKz),0)),"#c9a84c","▣")}
+    ${statCard("Lotes Esgotados", exhausted.length,"#555","○")}
+  </div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="sec-title">Lotes com Stock Disponível</div>
+    ${active.length===0?'<div class="empty">SEM STOCK — COMPRA USDT PARA CRIAR LOTES</div>':`
+    <div style="overflow-x:auto"><table class="tbl">
+      <thead><tr><th>Data</th><th>Fornecedor</th><th>Comprado</th><th>Câmbio</th><th>Restante</th><th>Custo Restante</th><th>Carteira</th><th></th></tr></thead>
+      <tbody>${active.map(l=>{
+        const w=db.wallets.find(w=>String(w.id)===String(l.walletId));
+        return `<tr>
+          <td>${fDate(l.date)}</td>
+          <td style="font-weight:700">${l.supplierName}</td>
+          <td style="color:#7eb8f7">${fU(l.usdt)}</td>
+          <td style="color:#c9a84c">${Number(l.rateKz).toLocaleString()} Kz</td>
+          <td><div style="color:#50c878;font-weight:700">${fU(l.remaining)}</div><div style="font-size:10px;color:#555">${(l.remaining/l.usdt*100).toFixed(0)}%</div></td>
+          <td>${fKz(l.remaining*l.rateKz)}</td>
+          <td style="color:#777">${w?.name||"—"}</td>
+          <td><button class="btn-danger" onclick="delLot('${l.id}')">✕</button></td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table></div>`}
+  </div>
+  ${exhausted.length>0?`
+  <div class="card" style="opacity:.6">
+    <div class="sec-title" style="color:#555">Lotes Esgotados</div>
+    <div style="overflow-x:auto"><table class="tbl">
+      <thead><tr><th>Data</th><th>Fornecedor</th><th>USDT</th><th>Câmbio</th><th>Carteira</th><th></th></tr></thead>
+      <tbody>${exhausted.map(l=>{
+        const w=db.wallets.find(w=>String(w.id)===String(l.walletId));
+        return `<tr><td>${fDate(l.date)}</td><td>${l.supplierName}</td><td>${fU(l.usdt)}</td><td>${Number(l.rateKz).toLocaleString()} Kz</td><td>${w?.name||"—"}</td><td><button class="btn-danger" onclick="delLot('${l.id}')">✕</button></td></tr>`;
+      }).join("")}</tbody>
+    </table></div>
+  </div>`:""}`;
+}
+window.delLot = async function(id){ if(confirm("Eliminar lote?")) await delDoc("lots",id); };
+
+// ── CLIENTS ────────────────────────────────────────────────────────
+function pageClients() {
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <div style="font-size:11px;color:#555;letter-spacing:2px">${db.clients.length} CLIENTES</div>
+    <button class="btn-primary" onclick="openModal('new-client')">+ NOVO CLIENTE</button>
+  </div>
+  <div class="card" style="overflow-x:auto">
+    ${db.clients.length===0?'<div class="empty">SEM CLIENTES</div>':`
+    <table class="tbl"><thead><tr><th>Nome</th><th>Telefone</th><th>Compras</th><th>Volume USDT</th><th>Lucro Gerado</th><th></th></tr></thead>
+    <tbody>${db.clients.map(c=>{
+      const ss=db.sales.filter(s=>String(s.clientId)===String(c.id));
+      const vol=ss.reduce((a,s)=>a+Number(s.totalUsdt||0),0);
+      const prf=ss.reduce((a,s)=>a+Number(s.totalProfit||0),0);
+      return `<tr>
+        <td style="font-weight:700;color:#e8e4d9">${c.name}</td>
+        <td style="color:#777">${c.phone||"—"}</td>
+        <td style="color:#c9a84c">${ss.length}</td>
+        <td style="color:#7eb8f7">${fU(vol)}</td>
+        <td style="color:${prf>=0?"#50c878":"#ff5050"}">${fKz(prf)}</td>
+        <td><button class="btn-danger" onclick="delClient('${c.id}')">✕</button></td>
+      </tr>`;
+    }).join("")}</tbody></table>`}
+  </div>
+  ${buildClientModal()}`;
+}
+window.delClient = async function(id){ if(confirm("Eliminar cliente?")) await delDoc("clients",id); };
+window.openModal = function(t){ modalState={type:t}; render(); };
+window.closeModal= function(){ modalState=null; render(); };
+function buildClientModal() {
+  if (modalState?.type!=="new-client") return "";
+  return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title">NOVO CLIENTE</div>
+    <div class="field" style="margin-bottom:12px"><label>Nome *</label><input id="nc-name" placeholder="Nome completo"/></div>
+    <div class="field" style="margin-bottom:12px"><label>Telefone / WhatsApp</label><input id="nc-phone" placeholder="+244 9XX XXX XXX"/></div>
+    <div class="field" style="margin-bottom:20px"><label>Notas</label><textarea id="nc-notes" rows="3" style="resize:vertical"></textarea></div>
+    <div style="display:flex;gap:12px">
+      <button class="btn-primary" style="flex:1" onclick="saveClient()">GUARDAR</button>
+      <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+    </div>
+  </div></div>`;
+}
+window.saveClient = async function(){
+  const name=document.getElementById("nc-name")?.value?.trim();
+  if(!name) return alert("Nome obrigatório.");
+  await saveDoc("clients",{id:uid(),name,phone:document.getElementById("nc-phone")?.value||"",notes:document.getElementById("nc-notes")?.value||""});
+  closeModal();
+};
+
+// ── RANKING ────────────────────────────────────────────────────────
+let rankPeriod = "month";
+function pageRanking() {
+  const now=new Date();
+  const PERIODS=[{id:"today","label":"HOJE"},{id:"week","label":"SEMANA"},{id:"month","label":"MÊS"},{id:"year","label":"ANO"},{id:"all","label":"TUDO"}];
+  const filter = d=>{
+    const dt=new Date(d);
+    if(rankPeriod==="today") return d===today();
+    if(rankPeriod==="week"){const ws=new Date(now);ws.setDate(now.getDate()-now.getDay());return dt>=ws;}
+    if(rankPeriod==="month") return dt.getMonth()===now.getMonth()&&dt.getFullYear()===now.getFullYear();
+    if(rankPeriod==="year") return dt.getFullYear()===now.getFullYear();
+    return true;
+  };
+  const sales=db.sales.filter(s=>s.clientId&&filter(s.date));
+  const grp={};
+  sales.forEach(s=>{if(!grp[s.clientId])grp[s.clientId]={vol:0,cnt:0,prf:0};grp[s.clientId].vol+=Number(s.totalUsdt||0);grp[s.clientId].cnt++;grp[s.clientId].prf+=Number(s.totalProfit||0);});
+  const ranked=Object.entries(grp).map(([id,st])=>({...st,client:db.clients.find(c=>String(c.id)===String(id))})).filter(r=>r.client).sort((a,b)=>b.vol-a.vol);
+
+  return `
+  <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
+    ${PERIODS.map(p=>`<button class="${rankPeriod===p.id?"btn-primary":"btn-ghost"}" style="font-size:11px;padding:7px 14px" onclick="setRankPeriod('${p.id}')">${p.label}</button>`).join("")}
+  </div>
+  <div class="card">
+    <div class="sec-title">★ Ranking — ${PERIODS.find(p=>p.id===rankPeriod)?.label}</div>
+    ${ranked.length===0?'<div class="empty">SEM VENDAS NESTE PERÍODO</div>':`
+    <table class="tbl"><thead><tr><th>#</th><th>Cliente</th><th>Compras</th><th>Volume USDT</th><th>Lucro Gerado</th><th></th></tr></thead>
+    <tbody>${ranked.map((r,i)=>`<tr>
+      <td style="font-family:'Syne',sans-serif;font-weight:800;font-size:18px;color:${i===0?"#FFD700":i===1?"#C0C0C0":i===2?"#CD7F32":"#444"}">${i+1}</td>
+      <td style="font-weight:700;color:#e8e4d9">${r.client.name}</td>
+      <td style="color:#c9a84c">${r.cnt}x</td>
+      <td style="color:#7eb8f7;font-weight:700">${fU(r.vol)}</td>
+      <td style="color:#50c878">${fKz(r.prf)}</td>
+      <td>${i===0?'<span class="badge gold">🏆 TOP</span>':i===1?'<span class="badge silver">🥈 VIP</span>':i===2?'<span class="badge bronze">🥉 FIEL</span>':""}</td>
+    </tr>`).join("")}</tbody></table>`}
+  </div>`;
+}
+window.setRankPeriod=function(p){rankPeriod=p;render();};
+
+// ── AFFILIATES ─────────────────────────────────────────────────────
+function pageAffiliates() {
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <div style="font-size:11px;color:#555;letter-spacing:2px">${db.affiliates.length} AFILIADOS</div>
+    <button class="btn-primary" onclick="openModal('new-aff')">+ NOVO AFILIADO</button>
+  </div>
+  <div class="card" style="overflow-x:auto;margin-bottom:16px">
+    ${db.affiliates.length===0?'<div class="empty">SEM AFILIADOS</div>':`
+    <table class="tbl"><thead><tr><th>Nome</th><th>Telefone</th><th>Vendas</th><th>Volume USDT</th><th></th></tr></thead>
+    <tbody>${db.affiliates.map(a=>{
+      const ss=db.sales.filter(s=>String(s.affiliateId)===String(a.id));
+      return `<tr>
+        <td style="font-weight:700">${a.name}</td>
+        <td style="color:#777">${a.phone||"—"}</td>
+        <td style="color:#c9a84c">${ss.length}</td>
+        <td style="color:#7eb8f7">${fU(ss.reduce((s,x)=>s+Number(x.totalUsdt||0),0))}</td>
+        <td><button class="btn-danger" onclick="delAff('${a.id}')">✕</button></td>
+      </tr>`;
+    }).join("")}</tbody></table>`}
+  </div>
+  <div class="card" style="background:rgba(201,168,76,.04);border-color:rgba(201,168,76,.15)">
+    <div style="font-size:11px;color:#c9a84c;letter-spacing:2px;margin-bottom:8px">💡 NOTA SOBRE AFILIADOS</div>
+    <div style="font-size:12px;color:#888;line-height:1.8">Ao vender a um afiliado, usa o mesmo câmbio de compra — o lucro será próximo de zero. O valor está na expansão da rede e no reconhecimento da Kâmbio Business.</div>
+  </div>
+  ${buildAffModal()}`;
+}
+window.delAff=async function(id){if(confirm("Eliminar afiliado?"))await delDoc("affiliates",id);};
+function buildAffModal(){
+  if(modalState?.type!=="new-aff") return "";
+  return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title">NOVO AFILIADO</div>
+    <div class="field" style="margin-bottom:12px"><label>Nome *</label><input id="na-name" placeholder="Nome / empresa"/></div>
+    <div class="field" style="margin-bottom:12px"><label>Telefone</label><input id="na-phone" placeholder="+244 9XX XXX XXX"/></div>
+    <div class="field" style="margin-bottom:20px"><label>Notas</label><textarea id="na-notes" rows="3" style="resize:vertical"></textarea></div>
+    <div style="display:flex;gap:12px">
+      <button class="btn-primary" style="flex:1" onclick="saveAff()">GUARDAR</button>
+      <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+    </div>
+  </div></div>`;
+}
+window.saveAff=async function(){
+  const name=document.getElementById("na-name")?.value?.trim();
+  if(!name)return alert("Nome obrigatório.");
+  await saveDoc("affiliates",{id:uid(),name,phone:document.getElementById("na-phone")?.value||"",notes:document.getElementById("na-notes")?.value||""});
+  closeModal();
+};
+
+// ── WALLETS ────────────────────────────────────────────────────────
+function pageWallets(){
+  const tU=db.wallets.reduce((s,w)=>s+Number(w.balance||0),0);
+  const tK=db.accounts.reduce((s,a)=>s+Number(a.balance||0),0);
+  return `
+  <div class="grid2">
+    <div class="card">
+      <div class="sec-title">Carteiras USDT</div>
+      ${db.wallets.map(w=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="flex:1;font-size:13px;color:#ccc">${w.name}</span>
+        <input type="number" style="width:130px" value="${w.balance}" onchange="adjWallet('${w.id}',this.value)"/>
+        <span style="font-size:11px;color:#555;width:45px">USDT</span>
+        <button class="btn-danger" onclick="delWallet('${w.id}')">✕</button>
+      </div>`).join("")}
+      <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+        <div class="row bold"><span>TOTAL</span><span style="color:#7eb8f7">${fU(tU)}</span></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <input id="nw-name" placeholder="Nova carteira" style="flex:1"/>
+        <input id="nw-bal" type="number" placeholder="Saldo" style="width:100px"/>
+        <button class="btn-ghost" onclick="addWallet()">+</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="sec-title">Contas em Kwanzas</div>
+      ${db.accounts.map(a=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="flex:1;font-size:13px;color:#ccc">${a.name}</span>
+        <input type="number" style="width:130px" value="${a.balance}" onchange="adjAccount('${a.id}',this.value)"/>
+        <span style="font-size:11px;color:#555;width:30px">Kz</span>
+        <button class="btn-danger" onclick="delAccount('${a.id}')">✕</button>
+      </div>`).join("")}
+      <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+        <div class="row bold"><span>TOTAL</span><span style="color:#c9a84c">${fKz(tK)}</span></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <input id="na2-name" placeholder="Nova conta" style="flex:1"/>
+        <input id="na2-bal" type="number" placeholder="Saldo" style="width:100px"/>
+        <button class="btn-ghost" onclick="addAccount2()">+</button>
+      </div>
+    </div>
+  </div>`;
+}
+window.adjWallet =async(id,v)=>{const w=db.wallets.find(x=>String(x.id)===String(id));if(w)await saveDoc("wallets",{...w,balance:parseFloat(v)||0});};
+window.delWallet =async(id)=>{if(confirm("Eliminar carteira?"))await delDoc("wallets",id);};
+window.adjAccount=async(id,v)=>{const a=db.accounts.find(x=>String(x.id)===String(id));if(a)await saveDoc("accounts",{...a,balance:parseFloat(v)||0});};
+window.delAccount=async(id)=>{if(confirm("Eliminar conta?"))await delDoc("accounts",id);};
+window.addWallet =async()=>{const n=document.getElementById("nw-name")?.value?.trim();if(!n)return;await saveDoc("wallets",{id:uid(),name:n,balance:parseFloat(document.getElementById("nw-bal")?.value)||0});};
+window.addAccount2=async()=>{const n=document.getElementById("na2-name")?.value?.trim();if(!n)return;await saveDoc("accounts",{id:uid(),name:n,balance:parseFloat(document.getElementById("na2-bal")?.value)||0});};
+
+// ── FINANCIAL ──────────────────────────────────────────────────────
+let finPeriod="month";
+function pageFinancial(){
+  const now=new Date();
+  const PERIODS=[{id:"today","label":"HOJE"},{id:"week","label":"SEMANA"},{id:"month","label":"MÊS"},{id:"year","label":"ANO"},{id:"all","label":"TUDO"}];
+  const filter=d=>{
+    const dt=new Date(d);
+    if(finPeriod==="today") return d===today();
+    if(finPeriod==="week"){const ws=new Date(now);ws.setDate(now.getDate()-now.getDay());return dt>=ws;}
+    if(finPeriod==="month") return dt.getMonth()===now.getMonth()&&dt.getFullYear()===now.getFullYear();
+    if(finPeriod==="year") return dt.getFullYear()===now.getFullYear();
+    return true;
+  };
+  const sales=db.sales.filter(s=>filter(s.date));
+  const lots=db.lots.filter(l=>filter(l.date));
+  const rev=sales.reduce((s,x)=>s+Number(x.totalRevenue||0),0);
+  const cost=lots.reduce((s,l)=>s+Number(l.totalKz||0),0);
+  const profit=sales.reduce((s,x)=>s+Number(x.totalProfit||0),0);
+
+  return `
+  <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
+    ${PERIODS.map(p=>`<button class="${finPeriod===p.id?"btn-primary":"btn-ghost"}" style="font-size:11px;padding:7px 14px" onclick="setFinPeriod('${p.id}')">${p.label}</button>`).join("")}
+  </div>
+  <div class="grid4" style="margin-bottom:20px">
+    ${statCard("Receita (Vendas)",fKz(rev),"#7eb8f7","▲")}
+    ${statCard("Custo (Compras)",fKz(cost),"#ff7850","▼")}
+    ${statCard("Lucro Líquido",fKz(profit),profit>=0?"#50c878":"#ff5050","◆")}
+    ${statCard("Vendas",sales.length,"#c9a84c","◈")}
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <div class="sec-title">💰 Gestão do Lucro</div>
+      <div style="font-size:12px;color:#666;margin-bottom:16px">Lucro de <span style="color:#c9a84c">${fKz(profit)}</span>:</div>
+      <div class="budget-box blue"><div class="budget-label">REINVESTIR (80%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(profit*.8)}</div><div style="font-size:10px;color:#444;margin-top:4px">Aumenta o capital de giro</div></div>
+      <div class="budget-box green"><div class="budget-label">PODES GASTAR (20%)</div><div class="budget-val" style="color:#50c878">${fKz(profit*.2)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
+      <div class="budget-box gold"><div class="budget-label">RESERVA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit*.1)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>
+    </div>
+    <div class="card">
+      <div class="sec-title">Vendas do Período</div>
+      ${sales.length===0?'<div class="empty">SEM VENDAS</div>':`
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Data</th><th>USDT</th><th>Câmbio</th><th>Receita</th><th>Lucro</th></tr></thead>
+        <tbody>${[...sales].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,12).map(s=>`<tr>
+          <td>${fDate(s.date)}</td>
+          <td style="color:#7eb8f7">${fU(s.totalUsdt)}</td>
+          <td style="color:#c9a84c">${Number(s.rateKz).toLocaleString()} Kz</td>
+          <td>${fKz(s.totalRevenue)}</td>
+          <td style="font-weight:700;color:${Number(s.totalProfit)>=0?"#50c878":"#ff5050"}">${fKz(s.totalProfit)}</td>
+        </tr>`).join("")}</tbody>
+      </table></div>`}
+    </div>
+  </div>`;
+}
+window.setFinPeriod=function(p){finPeriod=p;render();};
+
+// ── SETTINGS ───────────────────────────────────────────────────────
+function pageSettings(){
+  return `
+  <div class="grid2">
+    <div class="card">
+      <div class="sec-title">Fornecedores Frequentes</div>
+      ${db.suppliers.length===0?'<div style="font-size:12px;color:#444;margin-bottom:12px">Sem fornecedores. Adiciona para seleccionar rapidamente ao comprar.</div>':`
+      <table class="tbl" style="margin-bottom:12px">
+        <thead><tr><th>Nome</th><th>Telefone</th><th></th></tr></thead>
+        <tbody>${db.suppliers.map(s=>`<tr>
+          <td style="font-weight:700">${s.name}</td>
+          <td style="color:#777">${s.phone||"—"}</td>
+          <td><button class="btn-danger" onclick="delSup('${s.id}')">✕</button></td>
+        </tr>`).join("")}</tbody>
+      </table>`}
+      <div style="display:flex;gap:8px">
+        <input id="ns-name" placeholder="Nome" style="flex:1"/>
+        <input id="ns-phone" placeholder="Telefone" style="width:130px"/>
+        <button class="btn-ghost" onclick="addSup()">+</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="sec-title">Dados & Backup</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <button class="btn-primary" onclick="exportData()">⬇ EXPORTAR BACKUP JSON</button>
+        <label class="btn-ghost" style="text-align:center;cursor:pointer;padding:8px 16px;font-size:12px">
+          ⬆ IMPORTAR BACKUP
+          <input type="file" accept=".json" onchange="importData(event)" style="display:none"/>
+        </label>
+        <div style="border-top:1px solid #1a1a2e;padding-top:12px">
+          <button class="btn-danger" style="width:100%;padding:10px" onclick="resetData()">⚠ APAGAR TODOS OS DADOS</button>
+        </div>
+      </div>
+      <div style="margin-top:16px;padding:12px;background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px">
+        <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:6px">ESTADO FIREBASE</div>
+        <div id="sync-status-2"></div>
+        ${!isConfigured()?`<div style="font-size:11px;color:#888;margin-top:6px">Configure o Firebase no ficheiro HTML para sincronização entre dispositivos.</div>`:""}
+      </div>
+    </div>
+  </div>`;
+}
+window.delSup=async(id)=>{if(confirm("Eliminar?"))await delDoc("suppliers",id);};
+window.addSup=async()=>{const n=document.getElementById("ns-name")?.value?.trim();if(!n)return;await saveDoc("suppliers",{id:uid(),name:n,phone:document.getElementById("ns-phone")?.value||""});};
+window.exportData=()=>{
+  const blob=new Blob([JSON.stringify(db,null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`kambio_backup_${today()}.json`;a.click();
+};
+window.importData=(e)=>{
+  const f=e.target.files[0];if(!f)return;
+  const r=new FileReader();
+  r.onload=async(ev)=>{
+    try{
+      const d=JSON.parse(ev.target.result);
+      if(!confirm("Substituir todos os dados actuais?"))return;
+      for(const col of COLLECTIONS){
+        if(d[col]){for(const item of d[col]) await saveDoc(col,item);}
+      }
+      alert("✅ Dados importados!");render();
+    }catch{alert("Ficheiro inválido.");}
+  };r.readAsText(f);
+};
+window.resetData=async()=>{
+  if(!confirm("⚠️ Apagar TUDO? Esta acção é irreversível."))return;
+  for(const col of COLLECTIONS)for(const item of [...db[col]])await delDoc(col,item.id);
+  localStorage.removeItem(LOCAL_KEY);
+  seeded=false;
+  alert("Dados apagados.");render();
+};
+
+// ══════════════════════════════════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════════════════════════════════
+function topClientMonth(){
+  const now=new Date();
+  const ms=db.sales.filter(s=>{const d=new Date(s.date);return s.clientId&&d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
+  const g={};ms.forEach(s=>{g[s.clientId]=(g[s.clientId]||0)+Number(s.totalUsdt||0);});
+  const top=Object.entries(g).sort((a,b)=>b[1]-a[1])[0];
+  if(!top)return null;
+  return{...db.clients.find(c=>String(c.id)===String(top[0])),volume:top[1]};
+}
+function statCard(label,value,color,icon){
+  return `<div class="stat-card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="font-size:10px;color:#555;letter-spacing:2px;margin-bottom:8px;text-transform:uppercase">${label}</div>
+        <div style="font-size:16px;font-weight:700;color:${color};font-family:'Syne',sans-serif">${value}</div>
+      </div>
+      <div style="color:${color};font-size:18px;opacity:.3">${icon}</div>
+    </div>
+  </div>`;
+}
+function attachEvents(){ setStatus(isConfigured()?"connecting":"offline-local"); }
+
+// ── BOOT ───────────────────────────────────────────────────────────
+initFirebase();
+</script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@700;800&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#08080f;color:#e8e4d9;font-family:'Space Mono',monospace;min-height:100vh}
+::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:#0b0b14}::-webkit-scrollbar-thumb{background:#c9a84c55;border-radius:2px}
+#app{display:flex;min-height:100vh}
+.sidebar{width:196px;background:#0b0b14;border-right:1px solid #1c1c2e;display:flex;flex-direction:column;flex-shrink:0;z-index:50;position:relative}
+.brand{padding:22px 16px 18px;border-bottom:1px solid #1c1c2e}
+.brand-name{display:block;font-family:'Syne',sans-serif;font-weight:800;font-size:20px;color:#c9a84c;letter-spacing:3px}
+.brand-sub{display:block;font-size:8px;color:#333;letter-spacing:4px;margin-top:2px}
+.nav{background:none;border:none;color:#555;cursor:pointer;padding:11px 16px;display:flex;align-items:center;gap:10px;width:100%;font-family:'Space Mono',monospace;font-size:12px;letter-spacing:.5px;transition:all .15s;border-left:2px solid transparent;text-align:left}
+.nav:hover{color:#c9a84c;background:rgba(201,168,76,.04)}
+.nav.act{color:#c9a84c;border-left-color:#c9a84c;background:rgba(201,168,76,.07)}
+.quick-bal{padding:14px 16px;border-top:1px solid #1c1c2e;font-size:11px}
+.qrow{display:flex;justify-content:space-between;margin-bottom:4px;color:#777}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.header{background:#0b0b14;border-bottom:1px solid #1c1c2e;padding:14px 24px;display:flex;align-items:center;gap:16px}
+.page-title{font-family:'Syne',sans-serif;font-weight:800;font-size:16px;color:#e8e4d9;letter-spacing:1px}
+.page-date{font-size:10px;color:#444;letter-spacing:1px;margin-top:2px}
+.body{flex:1;padding:24px;overflow-y:auto}
+.card{background:#0f0f1a;border:1px solid #1a1a2e;border-radius:2px;padding:20px}
+.stat-card{background:#0f0f1a;border:1px solid #1a1a2e;border-radius:2px;padding:18px;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#c9a84c44,transparent)}
+.sec-title{font-size:11px;color:#c9a84c;letter-spacing:2px;margin-bottom:14px;text-transform:uppercase}
+.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #111;font-size:12px;color:#666}
+.row.bold{color:#aaa;font-weight:700}
+.btn-primary{background:#c9a84c;color:#08080f;border:none;padding:10px 20px;font-family:'Space Mono',monospace;font-size:12px;font-weight:700;letter-spacing:1px;cursor:pointer;transition:all .15s;border-radius:2px}
+.btn-primary:hover{background:#dab85c}
+.btn-ghost{background:transparent;color:#c9a84c;border:1px solid #c9a84c44;padding:8px 16px;font-family:'Space Mono',monospace;font-size:12px;cursor:pointer;transition:all .15s;border-radius:2px}
+.btn-ghost:hover{border-color:#c9a84c;background:rgba(201,168,76,.06)}
+.btn-danger{background:transparent;color:#e55;border:1px solid #e5555544;padding:5px 10px;font-family:'Space Mono',monospace;font-size:11px;cursor:pointer;transition:all .15s;border-radius:2px}
+.btn-danger:hover{background:#e55;color:#fff}
+input,select,textarea{background:#0b0b14;border:1px solid #1e1e30;color:#e8e4d9;padding:9px 12px;font-family:'Space Mono',monospace;font-size:12px;width:100%;outline:none;transition:border .15s;border-radius:2px}
+input:focus,select:focus,textarea:focus{border-color:#c9a84c55}
+select option{background:#0b0b14}
+label{font-size:10px;letter-spacing:1.5px;color:#555;display:block;margin-bottom:6px;text-transform:uppercase}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.field{display:flex;flex-direction:column}
+.field.full{grid-column:1/-1}
+.computed{background:#0b0b14;border:1px solid #1e1e30;padding:9px 12px;color:#c9a84c;font-weight:700;font-size:14px;border-radius:2px}
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{text-align:left;padding:9px 10px;color:#c9a84c;font-size:9px;letter-spacing:2px;border-bottom:1px solid #1a1a2e;text-transform:uppercase}
+.tbl td{padding:9px 10px;border-bottom:1px solid #111;color:#aaa}
+.tbl tr:hover td{background:rgba(201,168,76,.02)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.lot-entry{background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:12px;margin-bottom:8px}
+.budget-box{background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:14px;margin-bottom:10px}
+.budget-label{font-size:10px;color:#555;letter-spacing:2px;margin-bottom:6px}
+.budget-val{font-size:20px;font-weight:700;font-family:'Syne',sans-serif}
+.top-client-box{background:rgba(201,168,76,.05);border:1px solid rgba(201,168,76,.15);padding:12px;border-radius:2px;margin-top:10px}
+.badge{display:inline-block;padding:3px 8px;font-size:10px;letter-spacing:1px;border-radius:2px}
+.badge.gold{background:rgba(255,215,0,.1);color:#FFD700}
+.badge.silver{background:rgba(192,192,192,.1);color:#C0C0C0}
+.badge.bronze{background:rgba(205,127,50,.1);color:#CD7F32}
+.empty{text-align:center;padding:30px 0;color:#444;font-size:12px;letter-spacing:2px}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal{background:#0f0f1a;border:1px solid #c9a84c22;border-top:2px solid #c9a84c;padding:26px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto;border-radius:2px}
+.modal-title{font-family:'Syne',sans-serif;font-weight:800;font-size:16px;color:#c9a84c;margin-bottom:20px}
+.ham{display:none;background:none;border:1px solid #c9a84c44;color:#c9a84c;padding:7px 11px;cursor:pointer;font-size:15px;border-radius:2px}
+.veil{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:49}
+.veil.show{display:block}
+@media(max-width:900px){.grid4{grid-template-columns:1fr 1fr!important}.grid2{grid-template-columns:1fr!important}}
+@media(max-width:640px){
+  .sidebar{position:fixed;left:-200px;top:0;bottom:0;transition:left .25s}
+  .sidebar.open{left:0}
+  .ham{display:block}
+  .grid4{grid-template-columns:1fr 1fr!important}
+  .form-grid{grid-template-columns:1fr!important}
+  .body{padding:16px}
+}
+</style>
+</head>
+<body>
+<div id="app"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#555;letter-spacing:3px;font-size:12px">A CARREGAR...</div></div>
+</body>
+</html>
