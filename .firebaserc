@@ -1,5 +1,18 @@
 {
   "projects": {
     "default": "kambio-business"
-  }
+  },
+  "targets": {
+    "kambio-business": {
+      "hosting": {
+        "kambio-business": [
+          "kambio-business"
+        ],
+        "grupo-kambio-hub": [
+          "grupo-kambio-hub"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }
