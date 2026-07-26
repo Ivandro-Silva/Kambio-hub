@@ -21,10 +21,10 @@
     };
 
     // ── COLLECTIONS ────────────────────────────────────────────────────
-    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "sales"];
+    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "sales", "lots", "wallets", "accounts"];
 
     let app, db_fire;
-    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], sales: [] };
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], sales: [], lots: [], wallets: [], accounts: [] };
 
     // ── FIREBASE INIT ──────────────────────────────────────────────────
     async function initFirebase() {
@@ -97,6 +97,7 @@
       { id: "taxi", label: "Táxi", icon: "◉" },
       { id: "importacao", label: "Importação", icon: "◈" },
       { id: "custodia", label: "Custódia", icon: "🔒" },
+      { id: "emprestimos", label: "Empréstimos", icon: "💵" },
       { id: "calculadora", label: "Calculadora", icon: "⊕" },
     ];
 
@@ -164,17 +165,31 @@
   <div style="font-size:10px;color:#555;margin-top:3px">${pct}% da meta</div>`;
     }
 
+    function avgBuyRate(asset) {
+      const relevant = db.lots.filter(l => (l.asset || "USDT") === asset);
+      const totalQty = relevant.reduce((s, l) => s + Number(l.usdt || 0), 0);
+      if (!totalQty) return 0;
+      const totalKz = relevant.reduce((s, l) => s + Number(l.usdt || 0) * Number(l.rateKz || 0), 0);
+      return totalKz / totalQty;
+    }
+
+    function kbCapitalKz() {
+      const walletsKz = db.wallets.reduce((s, w) => {
+        const asset = w.asset || "USDT";
+        return s + Number(w.balance || 0) * avgBuyRate(asset);
+      }, 0);
+      const accountsKz = db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0);
+      return walletsKz + accountsKz;
+    }
+
     // ── PATRIMÔNIO TOTAL (excluindo custódia) ──────────────────────────
     function patrimonio() {
-      // personal income - expenses
       const income = db.hub_income.reduce((s, x) => s + Number(x.amount || 0), 0);
       const expenses = db.hub_expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
-      // taxi net
       const taxiIn = db.hub_taxi.reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiCost = db.hub_taxi_costs.reduce((s, x) => s + Number(x.amount || 0), 0);
-      // imports profit
       const importProfit = db.hub_imports.filter(i => i.status === "vendido").reduce((s, i) => s + Number(i.profitKz || 0), 0);
-      return income - expenses + taxiIn - taxiCost + importProfit;
+      return income - expenses + taxiIn - taxiCost + importProfit + kbCapitalKz();
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -187,6 +202,7 @@
         case "taxi": return pageTaxi();
         case "importacao": return pageImportacao();
         case "custodia": return pageCustodia();
+        case "emprestimos": return pageEmprestimos();
         case "calculadora": return pageCalculadora();
         default: return "";
       }
@@ -216,52 +232,53 @@
       const importProfitP = db.hub_imports.filter(i => i.status === "vendido" && inPeriod(i.orderDate, resumoPeriod)).reduce((s, i) => s + Number(i.profitKz || 0), 0);
 
       return `
-  <!-- META -->
-  <div class="card" style="margin-bottom:20px;border-color:#c9a84c33;background:linear-gradient(135deg,#0f0f1a,#111120)">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
-      <div>
-        <div style="font-size:10px;color:#c9a84c;letter-spacing:3px;margin-bottom:6px">META PATRIMONIAL 2026</div>
-        <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:#e8e4d9">${fKz(total)}</div>
-        <div style="font-size:12px;color:#555;margin-top:4px">Faltam <span style="color:#c9a84c">${fKz(falta)}</span> para os 2.000.000 Kz</div>
+      <!-- META -->
+      <div class="card" style="margin-bottom:20px;border-color:#c9a84c33;background:linear-gradient(135deg,#0f0f1a,#111120)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+          <div>
+            <div style="font-size:10px;color:#c9a84c;letter-spacing:3px;margin-bottom:6px">META PATRIMONIAL 2026</div>
+            <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:#e8e4d9">${fKz(total)}</div>
+            <div style="font-size:12px;color:#555;margin-top:4px">Faltam <span style="color:#c9a84c">${fKz(falta)}</span> para os 2.000.000 Kz</div>
+          </div>
+          <div style="font-family:'Syne',sans-serif;font-size:32px;font-weight:800;color:${pct >= 100 ? "#50c878" : "#c9a84c"}">${pct}%</div>
+        </div>
+        <div style="background:#1a1a2e;border-radius:4px;height:10px;overflow:hidden">
+          <div style="background:linear-gradient(90deg,#c9a84c,#50c878);width:${pct}%;height:100%;transition:width 1s;border-radius:4px"></div>
+        </div>
       </div>
-      <div style="font-family:'Syne',sans-serif;font-size:32px;font-weight:800;color:${pct >= 100 ? "#50c878" : "#c9a84c"}">${pct}%</div>
-    </div>
-    <div style="background:#1a1a2e;border-radius:4px;height:10px;overflow:hidden">
-      <div style="background:linear-gradient(90deg,#c9a84c,#50c878);width:${pct}%;height:100%;transition:width 1s;border-radius:4px"></div>
-    </div>
-  </div>
 
-  <div class="grid4" style="margin-bottom:20px">
-    ${sc("Finanças Pessoais", fKz(income - expenses), income - expenses >= 0 ? "#50c878" : "#ff5050", "◆")}
-    ${sc("Táxi (líquido)", fKz(taxiIn - taxiCost), "#7eb8f7", "◉")}
-    ${sc("Importação (lucro)", fKz(importProfit), "#c084fc", "◈")}
-    ${sc("Em Custódia", fKz(custodiaAtiva), "#ff7850", "🔒")}
-  </div>
+      <div class="grid4" style="margin-bottom:20px">
+        ${sc("Finanças Pessoais", fKz(income - expenses), income - expenses >= 0 ? "#50c878" : "#ff5050", "◆")}
+        ${sc("Táxi (líquido)", fKz(taxiIn - taxiCost), "#7eb8f7", "◉")}
+        ${sc("Importação (lucro)", fKz(importProfit), "#c084fc", "◈")}
+        ${sc("Em Custódia", fKz(custodiaAtiva), "#ff7850", "🔒")}
+      </div>
 
-  <div class="card" style="margin-bottom:20px">
-    <div class="sec-title">Decomposição do Património</div>
-    <div class="row"><span>Entradas pessoais</span><span style="color:#50c878">${fKz(income)}</span></div>
-    <div class="row"><span>Despesas pessoais</span><span style="color:#ff7850">- ${fKz(expenses)}</span></div>
-    <div class="row"><span>Receita do Táxi</span><span style="color:#7eb8f7">${fKz(taxiIn)}</span></div>
-    <div class="row"><span>Custos do Táxi</span><span style="color:#ff7850">- ${fKz(taxiCost)}</span></div>
-    <div class="row"><span>Lucro Importação</span><span style="color:#c084fc">${fKz(importProfit)}</span></div>
-    <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
-      <div class="row bold"><span>TOTAL (é teu)</span><span style="color:#c9a84c;font-size:15px">${fKz(total)}</span></div>
-      <div class="row"><span style="color:#555">Em custódia (não é teu)</span><span style="color:#ff7850">- ${fKz(custodiaAtiva)}</span></div>
-    </div>
-  </div>
+      <div class="card" style="margin-bottom:20px">
+        <div class="sec-title">Decomposição do Património</div>
+        <div class="row"><span>Entradas pessoais</span><span style="color:#50c878">${fKz(income)}</span></div>
+        <div class="row"><span>Despesas pessoais</span><span style="color:#ff7850">- ${fKz(expenses)}</span></div>
+        <div class="row"><span>Receita do Táxi</span><span style="color:#7eb8f7">${fKz(taxiIn)}</span></div>
+        <div class="row"><span>Custos do Táxi</span><span style="color:#ff7850">- ${fKz(taxiCost)}</span></div>
+        <div class="row"><span>Lucro Importação</span><span style="color:#c084fc">${fKz(importProfit)}</span></div>
+        <div class="row"><span>Capital na Kâmbio Business (convertido)</span><span style="color:#7eb8f7">${fKz(kbCapitalKz())}</span></div>
+        <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">          
+          <div class="row bold"><span>TOTAL (é teu)</span><span style="color:#c9a84c;font-size:15px">${fKz(total)}</span></div>
+          <div class="row"><span style="color:#555">Em custódia (não é teu)</span><span style="color:#ff7850">- ${fKz(custodiaAtiva)}</span></div>
+        </div>
+      </div>
 
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-    <div class="sec-title" style="margin:0">💡 Divisão do Lucro por Negócio — 60 · 30 · 10</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      ${RP.map(p => `<button class="${resumoPeriod === p.id ? "btn-p" : "btn-ghost"}" style="font-size:10px;padding:6px 12px" onclick="setResumoPeriod('${p.id}')">${p.label}</button>`).join("")}
-    </div>
-  </div>
-  <div class="grid3">
-    ${splitBox("Kâmbio Business", kambioProfitP, "#7eb8f7")}
-    ${splitBox("Táxi", taxiLiquidP, "#c084fc")}
-    ${splitBox("Importação", importProfitP, "#50c878")}
-  </div>`;
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div class="sec-title" style="margin:0">💡 Divisão do Lucro por Negócio — 60 · 30 · 10</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${RP.map(p => `<button class="${resumoPeriod === p.id ? "btn-p" : "btn-ghost"}" style="font-size:10px;padding:6px 12px" onclick="setResumoPeriod('${p.id}')">${p.label}</button>`).join("")}
+        </div>
+      </div>
+      <div class="grid3">
+        ${splitBox("Kâmbio Business", kambioProfitP, "#7eb8f7")}
+        ${splitBox("Táxi", taxiLiquidP, "#c084fc")}
+        ${splitBox("Importação", importProfitP, "#50c878")}
+      </div>`;
     }
 
     // ── FINANÇAS PESSOAIS ──────────────────────────────────────────────
@@ -270,7 +287,7 @@
       const expenses = db.hub_expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
       const balance = income - expenses;
 
-      const INCOME_CATS = ["Salário", "Lucro Kâmbio (30%)", "Serviços Extras", "Importação", "Táxi", "Outro"];
+      const INCOME_CATS = ["Salário", "Serviços Extras", "Importação", "Táxi", "Outro"];
       const EXPENSE_CATS = ["Alimentação", "Transporte", "Telecomunicações", "Lazer", "Vestuário", "Cota Juventude", "Outro"];
 
       return `
@@ -628,53 +645,53 @@
       const totalAtivo = active.reduce((s, x) => s + Number(x.amount || 0), 0);
 
       return `
-  <div class="grid4" style="margin-bottom:20px">
-    ${sc("Em Custódia (ativo)", fKz(totalAtivo), "#ff7850", "🔒")}
-    ${sc("Nº de Pessoas", active.length, "#7eb8f7", "◉")}
-    ${sc("Já Devolvido", fKz(returned.reduce((s, x) => s + Number(x.amount || 0), 0)), "#50c878", "✓")}
-    ${sc("Total Recebido", fKz(db.hub_custody.reduce((s, x) => s + Number(x.amount || 0), 0)), "#c9a84c", "◈")}
-  </div>
+      <div class="grid4" style="margin-bottom:20px">
+        ${sc("Em Custódia (ativo)", fKz(totalAtivo), "#ff7850", "🔒")}
+        ${sc("Nº de Pessoas", active.length, "#7eb8f7", "◉")}
+        ${sc("Já Devolvido", fKz(returned.reduce((s, x) => s + Number(x.amount || 0), 0)), "#50c878", "✓")}
+        ${sc("Total Recebido", fKz(db.hub_custody.reduce((s, x) => s + Number(x.amount || 0), 0)), "#c9a84c", "◈")}
+      </div>
 
-  <div style="background:rgba(255,120,80,0.05);border:1px solid rgba(255,120,80,0.2);border-radius:2px;padding:14px;margin-bottom:20px;font-size:12px;color:#888;line-height:1.8">
-    ⚠️ O dinheiro em custódia <strong style="color:#ff7850">não é teu</strong> — está contabilizado nas tuas contas mas excluído do cálculo do teu património real.
-    Quando usas dinheiro de custódia para investir no negócio, regista um movimento de saída aqui.
-  </div>
+      <div style="background:rgba(255,120,80,0.05);border:1px solid rgba(255,120,80,0.2);border-radius:2px;padding:14px;margin-bottom:20px;font-size:12px;color:#888;line-height:1.8">
+        ⚠️ O dinheiro em custódia <strong style="color:#ff7850">não é teu</strong> — está contabilizado nas tuas contas mas excluído do cálculo do teu património real.
+        Quando usas dinheiro de custódia para investir no negócio, regista um movimento de saída aqui.
+      </div>
 
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <div class="sec-title" style="margin:0">Dinheiro Guardado de Terceiros</div>
-      <button class="btn-p" onclick="openModal('custody')">+ REGISTAR</button>
-    </div>
-    ${active.length === 0 ? empty("Nenhum depósito em custódia activo.") : `
-    <div style="overflow-x:auto"><table class="tbl">
-      <thead><tr><th>Pessoa</th><th>Valor</th><th>Data Entrada</th><th>Conta</th><th>Utilizado no Negócio</th><th>Notas</th><th></th></tr></thead>
-      <tbody>${active.map(x => `<tr>
-        <td style="font-weight:700;color:#e8e4d9">${x.person}</td>
-        <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
-        <td>${fDate(x.date)}</td>
-        <td style="color:#777">${x.account || "—"}</td>
-        <td>${x.usedInBusiness ? `<span style="color:#c9a84c">Sim — ${fKz(x.usedAmount || 0)}</span>` : '<span style="color:#555">Não</span>'}</td>
-        <td style="color:#555;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.notes || "—"}</td>
-        <td style="display:flex;gap:4px">
-          <button class="btn-d" style="color:#50c878;border-color:#50c87844" onclick="markReturned('${x.id}')">✓</button>
-          <button class="btn-d" onclick="del('hub_custody','${x.id}')">✕</button>
-        </td>
-      </tr>`).join("")}
-      </tbody>
-    </table></div>`}
-    ${returned.length > 0 ? `
-    <div style="margin-top:16px;opacity:.5">
-      <div class="sec-title" style="color:#555">Já Devolvidos</div>
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>Pessoa</th><th>Valor</th><th>Data</th></tr></thead>
-        <tbody>${returned.map(x => `<tr>
-          <td>${x.person}</td><td style="color:#50c878">${fKz(x.amount)}</td><td>${fDate(x.date)}</td>
-        </tr>`).join("")}</tbody>
-      </table></div>
-    </div>`: ""}
-  </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="sec-title" style="margin:0">Dinheiro Guardado de Terceiros</div>
+          <button class="btn-p" onclick="openModal('custody')">+ REGISTAR</button>
+        </div>
+        ${active.length === 0 ? empty("Nenhum depósito em custódia activo.") : `
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Pessoa</th><th>Valor</th><th>Data Entrada</th><th>Conta</th><th>Utilizado no Negócio</th><th>Notas</th><th></th></tr></thead>
+          <tbody>${active.map(x => `<tr>
+            <td style="font-weight:700;color:#e8e4d9">${x.person}</td>
+            <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
+            <td>${fDate(x.date)}</td>
+            <td style="color:#777">${x.account || "—"}</td>
+            <td>${x.usedInBusiness ? `<span style="color:#c9a84c">Sim — ${fKz(x.usedAmount || 0)}</span>` : '<span style="color:#555">Não</span>'}</td>
+            <td style="color:#555;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.notes || "—"}</td>
+            <td style="display:flex;gap:4px">
+              <button class="btn-d" style="color:#50c878;border-color:#50c87844" onclick="markReturned('${x.id}')">✓</button>
+              <button class="btn-d" onclick="del('hub_custody','${x.id}')">✕</button>
+            </td>
+          </tr>`).join("")}
+          </tbody>
+        </table></div>`}
+        ${returned.length > 0 ? `
+        <div style="margin-top:16px;opacity:.5">
+          <div class="sec-title" style="color:#555">Já Devolvidos</div>
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Pessoa</th><th>Valor</th><th>Data</th></tr></thead>
+            <tbody>${returned.map(x => `<tr>
+              <td>${x.person}</td><td style="color:#50c878">${fKz(x.amount)}</td><td>${fDate(x.date)}</td>
+            </tr>`).join("")}</tbody>
+          </table></div>
+        </div>`: ""}
+      </div>
 
-  ${modal === "custody" ? modalForm("REGISTAR CUSTÓDIA", "custody", [
+      ${modal === "custody" ? modalForm("REGISTAR CUSTÓDIA", "custody", [
         { id: "person", label: "Nome da Pessoa", type: "text", placeholder: "ex: Tio Manuel" },
         { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 200000" },
         { id: "date", label: "Data de Entrada", type: "date", val: today() },
@@ -688,6 +705,78 @@
       }) : ""}`;
     }
 
+    function pageEmprestimos() {
+      const loans = [...db.hub_loans].sort((a, b) => new Date(b.date) - new Date(a.date));
+      const active = loans.filter(l => !l.returned);
+      const returned = loans.filter(l => l.returned);
+      const totalActive = active.reduce((s, l) => s + Number(l.amount || 0), 0);
+      const now = new Date();
+      const overdue = active.filter(l => l.dueDate && new Date(l.dueDate) < now);
+
+      return `
+      <div class="grid4" style="margin-bottom:20px">
+        ${sc("Emprestado (activo)", fKz(totalActive), "#ff7850", "💵")}
+        ${sc("Nº de Empréstimos", active.length, "#7eb8f7", "◉")}
+        ${sc("Em Atraso", overdue.length, overdue.length > 0 ? "#ff5050" : "#50c878", "⚠")}
+        ${sc("Já Devolvido", fKz(returned.reduce((s, l) => s + Number(l.amount || 0), 0)), "#50c878", "✓")}
+      </div>
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="sec-title" style="margin:0">Dinheiro Emprestado</div>
+          <button class="btn-p" onclick="openModal('loan')">+ NOVO EMPRÉSTIMO</button>
+        </div>
+        ${active.length === 0 ? empty("Sem empréstimos activos") : `
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Pessoa</th><th>Valor</th><th>Data</th><th>Prazo</th><th>Estado</th><th>Notas</th><th></th></tr></thead>
+          <tbody>${active.map(l => {
+        const isOverdue = l.dueDate && new Date(l.dueDate) < now;
+        return `<tr>
+              <td style="font-weight:700;color:#e8e4d9">${l.person}</td>
+              <td style="color:#ff7850;font-weight:700">${fKz(l.amount)}</td>
+              <td>${fDate(l.date)}</td>
+              <td style="color:${isOverdue ? "#ff5050" : "#777"}">${l.dueDate ? fDate(l.dueDate) : "—"}</td>
+              <td>${isOverdue ? '<span class="cat-badge red">EM ATRASO</span>' : '<span class="cat-badge green">EM DIA</span>'}</td>
+              <td style="color:#555;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.notes || "—"}</td>
+              <td style="display:flex;gap:4px">
+                <button class="btn-d" style="color:#50c878;border-color:#50c87844" onclick="markLoanReturned('${l.id}')">✓</button>
+                <button class="btn-d" onclick="del('hub_loans','${l.id}')">✕</button>
+              </td>
+            </tr>`;
+      }).join("")}</tbody>
+        </table></div>`}
+        ${returned.length > 0 ? `
+        <div style="margin-top:16px;opacity:.5">
+          <div class="sec-title" style="color:#555">Já Devolvidos</div>
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Pessoa</th><th>Valor</th><th>Data</th></tr></thead>
+            <tbody>${returned.map(l => `<tr><td>${l.person}</td><td style="color:#50c878">${fKz(l.amount)}</td><td>${fDate(l.date)}</td></tr>`).join("")}</tbody>
+          </table></div>
+        </div>`: ""}
+      </div>
+
+      ${modal === "loan" ? modalForm("NOVO EMPRÉSTIMO", "loan", [
+        { id: "person", label: "Nome da Pessoa", type: "text", placeholder: "ex: João" },
+        { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 50000" },
+        { id: "date", label: "Data do Empréstimo", type: "date", val: today() },
+        { id: "dueDate", label: "Prazo para Devolver", type: "date", val: "" },
+        { id: "notes", label: "Notas", type: "text", placeholder: "Opcional..." },
+      ]) : ""}`;
+    }
+
+    window.markLoanReturned = async function (id) {
+      if (!confirm("Marcar como devolvido?")) return;
+      const item = db.hub_loans.find(x => x.id === id);
+      if (item) await saveDoc("hub_loans", { ...item, returned: true });
+    };
+
+    window.saveModal_loan = async function () {
+      const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), dueDate = gv("dueDate"), notes = gv("notes");
+      if (!person || !amount) return alert("Nome e valor obrigatórios.");
+      await saveDoc("hub_loans", { id: uid(), person, amount, date, dueDate, notes, returned: false });
+      modal = null; render();
+    };
+
     window.markReturned = async function (id) {
       if (!confirm("Marcar como devolvido?")) return;
       const item = db.hub_custody.find(x => x.id === id);
@@ -697,31 +786,31 @@
     // ── CALCULADORA IMPORTAÇÃO ─────────────────────────────────────────
     function pageCalculadora() {
       return `
-  <div class="card" style="max-width:600px;margin:0 auto">
-    <div class="sec-title">Calculadora de Importação — iPhone / eBay</div>
-    <div style="font-size:11px;color:#555;margin-bottom:20px">Descobre o preço máximo a pagar no eBay para atingires o lucro desejado.</div>
+      <div class="card" style="max-width:600px;margin:0 auto">
+        <div class="sec-title">Calculadora de Importação — iPhone / eBay</div>
+        <div style="font-size:11px;color:#555;margin-bottom:20px">Descobre o preço máximo a pagar no eBay para atingires o lucro desejado.</div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px">
-      <div class="field"><label>Taxa USDT/USD (Bybit)</label><input type="number" id="c-rate-usd" value="1.01454545" step="0.00001" oninput="runCalc()"/></div>
-      <div class="field"><label>Taxa USDT/Kz</label><input type="number" id="c-rate-kz" value="1157" oninput="runCalc()"/></div>
-      <div class="field"><label>Frete eBay → Redirecionadora (USD)</label><input type="number" id="c-freight-us" placeholder="0 se grátis" oninput="runCalc()"/></div>
-      <div class="field"><label>Frete Global Shopaholics → Angola (USD)</label><input type="number" id="c-freight-ao" placeholder="ex: 17.41" oninput="runCalc()"/></div>
-      <div class="field"><label>Tráfego Pago (Kz)</label><input type="number" id="c-marketing" placeholder="ex: 5000" oninput="runCalc()"/></div>
-      <div class="field"><label>Embalagem / Sacolas (Kz)</label><input type="number" id="c-packaging" placeholder="ex: 2000" oninput="runCalc()"/></div>
-    </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px">
+          <div class="field"><label>Taxa USDT/USD (Bybit)</label><input type="number" id="c-rate-usd" value="1.01454545" step="0.00001" oninput="runCalc()"/></div>
+          <div class="field"><label>Taxa USDT/Kz</label><input type="number" id="c-rate-kz" value="1157" oninput="runCalc()"/></div>
+          <div class="field"><label>Frete eBay → Redirecionadora (USD)</label><input type="number" id="c-freight-us" placeholder="0 se grátis" oninput="runCalc()"/></div>
+          <div class="field"><label>Frete Global Shopaholics → Angola (USD)</label><input type="number" id="c-freight-ao" placeholder="ex: 17.41" oninput="runCalc()"/></div>
+          <div class="field"><label>Tráfego Pago (Kz)</label><input type="number" id="c-marketing" placeholder="ex: 5000" oninput="runCalc()"/></div>
+          <div class="field"><label>Embalagem / Sacolas (Kz)</label><input type="number" id="c-packaging" placeholder="ex: 2000" oninput="runCalc()"/></div>
+        </div>
 
-    <div style="border-top:1px solid #1a1a2e;padding-top:16px;margin-bottom:16px">
-      <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:12px">CENÁRIO DE VENDA</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-        <div class="field"><label>Preço de Venda Pretendido (Kz)</label><input type="number" id="c-sale" placeholder="ex: 470000" oninput="runCalc()"/></div>
-        <div class="field"><label>Lucro Desejado (Kz)</label><input type="number" id="c-profit" placeholder="ex: 100000" oninput="runCalc()"/></div>
-      </div>
-    </div>
+        <div style="border-top:1px solid #1a1a2e;padding-top:16px;margin-bottom:16px">
+          <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:12px">CENÁRIO DE VENDA</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+            <div class="field"><label>Preço de Venda Pretendido (Kz)</label><input type="number" id="c-sale" placeholder="ex: 470000" oninput="runCalc()"/></div>
+            <div class="field"><label>Lucro Desejado (Kz)</label><input type="number" id="c-profit" placeholder="ex: 100000" oninput="runCalc()"/></div>
+          </div>
+        </div>
 
-    <div id="calc-result" style="background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:20px">
-      <div style="text-align:center;color:#444;font-size:12px;letter-spacing:2px">PREENCHE OS CAMPOS ACIMA</div>
-    </div>
-  </div>`;
+        <div id="calc-result" style="background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:20px">
+          <div style="text-align:center;color:#444;font-size:12px;letter-spacing:2px">PREENCHE OS CAMPOS ACIMA</div>
+        </div>
+      </div>`;
     }
 
     window.runCalc = function () {

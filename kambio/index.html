@@ -26,12 +26,12 @@
     };
     // ══════════════════════════════════════════════════════════════════
 
-    const COLLECTIONS = ["lots", "sales", "clients", "affiliates", "suppliers", "accounts", "wallets"];
+    const COLLECTIONS = ["lots", "sales", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers"];
     const DEFAULT_WALLETS = ["RedotPay", "Binance", "Bybit", "Kast", "Grey"];
     const DEFAULT_ACCOUNTS = ["BFA", "BAI", "Multicaixa Express (Avó/Irmãos)", "PayPay"];
 
     let app, db_fire;
-    let db = { lots: [], sales: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [] };
+    let db = { lots: [], sales: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [] };
     let unsubscribers = [];
 
     // ── LOCAL FALLBACK (quando Firebase não está configurado) ──────────
@@ -105,11 +105,12 @@
 
     // ── SEED DEFAULTS ──────────────────────────────────────────────────
     let seeded = false;
+
     async function seedDefaults() {
       if (seeded) return;
       if (db.wallets.length === 0) {
         for (const [i, n] of DEFAULT_WALLETS.entries())
-          await saveDoc("wallets", { id: i + 1, name: n, balance: 0 });
+          await saveDoc("wallets", { id: i + 1, name: n, balance: 0, asset: "USDT" });
       }
       if (db.accounts.length === 0) {
         for (const [i, n] of DEFAULT_ACCOUNTS.entries())
@@ -139,8 +140,17 @@
     let currentPage = "dashboard";
     let modalState = null; // {type, data}
 
+    function hubLink() {
+      if (location.protocol === "file:" || location.hostname === "localhost") {
+        return "../hub/index.html";
+      }
+      return "https://grupo-kambio-hub.web.app";
+    }
+
     const fKz = v => `${Number(v || 0).toLocaleString("pt-AO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kz`;
     const fU = v => `${Number(v || 0).toFixed(4)} USDT`;
+    const FIAT_ASSETS = ["EUR", "USD", "GBP"];
+    const fAsset = (v, asset = "USDT") => `${Number(v || 0).toFixed(FIAT_ASSETS.includes(asset) ? 2 : 4)} ${asset}`;
     const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
@@ -154,6 +164,7 @@
       { id: "ranking", "label": "Ranking", icon: "★" },
       { id: "affiliates", "label": "Afiliados", icon: "◎" },
       { id: "wallets", "label": "Carteiras", icon: "◆" },
+      { id: "transfers", "label": "Transferências", icon: "⇄" },
       { id: "financial", "label": "Financeiro", icon: "⊕" },
       { id: "settings", "label": "Definições", icon: "⚙" },
     ];
@@ -168,39 +179,40 @@
 
     function buildLayout() {
       return `
-  <aside class="sidebar" id="sidebar">
-    <div class="brand">
-      <span class="brand-name">KÂMBIO</span>
-      <span class="brand-sub">BUSINESS · PRO</span>
-    </div>
-    <nav>
-      ${PAGES.map(p => `
-        <button class="nav${currentPage === p.id ? " act" : ""}" onclick="navigate('${p.id}')">
-          <span style="font-size:15px;width:20px;flex-shrink:0">${p.icon}</span>
-          <span>${p.label}</span>
-        </button>`).join("")}
-    </nav>
-    <div class="quick-bal">
-      <div style="color:#555;letter-spacing:2px;margin-bottom:8px;font-size:10px">SALDO RÁPIDO</div>
-      <div class="qrow"><span>USDT Total</span><span style="color:#7eb8f7;font-weight:700">${fU(db.wallets.reduce((s, w) => s + Number(w.balance || 0), 0))}</span></div>
-      <div class="qrow"><span>Kz Total</span><span style="color:#c9a84c;font-weight:700">${fKz(db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0))}</span></div>
-      <div id="sync-status" style="margin-top:8px"></div>
-    </div>
-  </aside>
-  <div class="veil" id="veil" onclick="closeMenu()"></div>
-  <div class="main">
-    <header class="header">
-      <button class="ham" onclick="toggleMenu()">☰</button>
-      <div>
-        <div class="page-title">${PAGES.find(p => p.id === currentPage)?.label || ""}</div>
-        <div class="page-date">${new Date().toLocaleDateString("pt-AO", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
-      </div>
-    </header>
-    <div class="body">
-      ${buildPage()}
-      ${modalState ? buildModal() : ""}
-    </div>
-  </div>`;
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <span class="brand-name">KÂMBIO</span>
+          <span class="brand-sub">BUSINESS · PRO</span>
+        </div>
+        <nav>
+          ${PAGES.map(p => `
+            <button class="nav${currentPage === p.id ? " act" : ""}" onclick="navigate('${p.id}')">
+              <span style="font-size:15px;width:20px;flex-shrink:0">${p.icon}</span>
+              <span>${p.label}</span>
+            </button>`).join("")}
+        </nav>
+        <div class="quick-bal">
+          <div style="color:#555;letter-spacing:2px;margin-bottom:8px;font-size:10px">SALDO RÁPIDO</div>
+          ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + Number(w.balance || 0); }); return Object.entries(t).map(([a, v]) => `<div class="qrow"><span>${a}</span><span style="color:#7eb8f7;font-weight:700">${fAsset(v, a)}</span></div>`).join(""); })()}
+          <div class="qrow"><span>Kz Total</span><span style="color:#c9a84c;font-weight:700">${fKz(db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0))}</span></div>
+          <div id="sync-status" style="margin-top:8px"></div>
+        </div>
+      </aside>
+      <div class="veil" id="veil" onclick="closeMenu()"></div>
+      <div class="main">
+        <header class="header">
+          <button class="ham" onclick="toggleMenu()">☰</button>
+          <div>
+            <div class="page-title">${PAGES.find(p => p.id === currentPage)?.label || ""}</div>
+            <div class="page-date">${new Date().toLocaleDateString("pt-AO", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
+          </div>
+          <a href="${hubLink()}" style="margin-left:auto;font-size:10px;color:#c9a84c;text-decoration:none;letter-spacing:1px;border:1px solid #c9a84c33;padding:6px 12px;border-radius:2px">← HUB</a>
+        </header>
+
+        <div class="body">
+          ${buildPage()}
+        </div>
+      </div>`;
     }
 
     function navigate(p) { currentPage = p; closeMenu(); render(); }
@@ -229,6 +241,7 @@
         case "ranking": return pageRanking();
         case "affiliates": return pageAffiliates();
         case "wallets": return pageWallets();
+        case "transfers": return pageTransfers();
         case "financial": return pageFinancial();
         case "settings": return pageSettings();
         default: return "";
@@ -243,7 +256,8 @@
       const todayP = db.sales.filter(s => s.date === todayStr).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
       const monthP = db.sales.filter(s => new Date(s.date) >= monthStart).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
       const totalP = db.sales.reduce((s, x) => s + Number(x.totalProfit || 0), 0);
-      const lotStock = db.lots.filter(l => Number(l.remaining || 0) > 0).reduce((s, l) => s + Number(l.remaining || 0), 0);
+      const stockByAsset = {}; db.lots.filter(l => Number(l.remaining || 0) > 0).forEach(l => { const a = l.asset || "USDT"; stockByAsset[a] = (stockByAsset[a] || 0) + Number(l.remaining || 0); });
+      const stockStr = Object.entries(stockByAsset).map(([a, v]) => fAsset(v, a)).join(" · ") || "0";
       const recent = [...db.sales].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
       const topC = topClientMonth();
       const suggest = monthP * 0.30;
@@ -253,14 +267,14 @@
     ${statCard("Lucro Hoje", fKz(todayP), todayP >= 0 ? "#50c878" : "#ff5050", "▲")}
     ${statCard("Lucro do Mês", fKz(monthP), "#c9a84c", "◆")}
     ${statCard("Lucro Total", fKz(totalP), "#c9a84c", "★")}
-    ${statCard("Stock Disponível", fU(lotStock), "#7eb8f7", "◈")}
+    ${statCard("Stock Disponível", stockStr, "#7eb8f7", "◈")}
   </div>
   <div class="grid2" style="margin-bottom:20px">
     <div class="card">
-      <div class="sec-title">Carteiras USDT</div>
-      ${db.wallets.map(w => `<div class="row"><span>${w.name}</span><span style="color:#7eb8f7;font-weight:700">${fU(w.balance)}</span></div>`).join("")}
+      <div class="sec-title">Carteiras (Multi-Ativo)</div>
+      ${db.wallets.map(w => `<div class="row"><span>${w.name} <span style="color:#444">(${w.asset || "USDT"})</span></span><span style="color:#7eb8f7;font-weight:700">${fAsset(w.balance, w.asset || "USDT")}</span></div>`).join("")}
       <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
-        <div class="row bold"><span>TOTAL</span><span style="color:#7eb8f7">${fU(db.wallets.reduce((s, w) => s + Number(w.balance || 0), 0))}</span></div>
+        ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + Number(w.balance || 0); }); return Object.entries(t).map(([a, v]) => `<div class="row bold"><span>TOTAL ${a}</span><span style="color:#7eb8f7">${fAsset(v, a)}</span></div>`).join(""); })()}
       </div>
     </div>
     <div class="card">
@@ -315,13 +329,16 @@
           </select>
         </div>
         <div class="field" id="b-supname-wrap" style="display:none"><label>Nome do Fornecedor *</label><input type="text" id="b-supname" placeholder="ex: João Silva"/></div>
-        <div class="field"><label>Quantidade USDT *</label><input type="number" id="b-usdt" placeholder="ex: 500" oninput="calcBuyTotal()"/></div>
-        <div class="field"><label>Câmbio de Compra (Kz/USDT) *</label><input type="number" id="b-rate" placeholder="ex: 6200" oninput="calcBuyTotal()"/></div>
-        <div class="field"><label>Total a Pagar</label><div class="computed" id="b-total">0,00 Kz</div></div>
+        <div class="field"><label>Ativo *</label>
+          <input list="asset-options-buy" id="b-asset" value="USDT" oninput="onAssetChangeBuy()"/>
+          <datalist id="asset-options-buy"><option value="USDT"></option><option value="USDC"></option><option value="EUR"></option><option value="USD"></option></datalist>
+        </div>
+        <div class="field"><label>Quantidade <span id="b-asset-label">USDT</span> *</label><input type="number" id="b-usdt" placeholder="ex: 500" oninput="calcBuyTotal()"/></div>
+        <div class="field"><label>Câmbio de Compra (Kz/<span id="b-asset-label2">USDT</span>) *</label><input type="number" id="b-rate" placeholder="ex: 6200" oninput="calcBuyTotal()"/></div>        <div class="field"><label>Total a Pagar</label><div class="computed" id="b-total">0,00 Kz</div></div>
         <div class="field"><label>Carteira de Destino *</label>
           <select id="b-wallet">
             <option value="">— Seleccionar —</option>
-            ${db.wallets.map(w => `<option value="${w.id}">${w.name} (${fU(w.balance)})</option>`).join("")}
+            ${db.wallets.map(w => `<option value="${w.id}">${w.name} · ${w.asset || "USDT"} (${fAsset(w.balance, w.asset || "USDT")})</option>`).join("")}
           </select>
         </div>
         <div class="field"><label>Conta de Pagamento (Kz) *</label>
@@ -338,15 +355,17 @@
       <div class="sec-title">Lotes Recentes</div>
       ${lots.length === 0 ? '<div class="empty">SEM LOTES</div>' : `
       <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>Data</th><th>Fornecedor</th><th>USDT</th><th>Câmbio</th><th>Restante</th><th>Carteira</th></tr></thead>
+       <thead><tr><th>Data</th><th>Fornecedor</th><th>Ativo</th><th>Qtd</th><th>Câmbio</th><th>Restante</th><th>Carteira</th></tr></thead>
         <tbody>${lots.map(l => {
         const w = db.wallets.find(x => String(x.id) === String(l.walletId));
+        const asset = l.asset || "USDT";
         return `<tr>
             <td>${fDate(l.date)}</td>
             <td style="font-weight:700">${l.supplierName || "—"}</td>
-            <td style="color:#7eb8f7">${fU(l.usdt)}</td>
+            <td style="color:#c084fc">${asset}</td>
+            <td style="color:#7eb8f7">${fAsset(l.usdt, asset)}</td>
             <td style="color:#c9a84c">${Number(l.rateKz).toLocaleString()} Kz</td>
-            <td style="color:${Number(l.remaining) > 0 ? "#50c878" : "#555"}">${fU(l.remaining)}</td>
+            <td style="color:${Number(l.remaining) > 0 ? "#50c878" : "#555"}">${fAsset(l.remaining, asset)}</td>
             <td style="color:#777">${w?.name || "—"}</td>
           </tr>`;
       }).join("")}</tbody>
@@ -360,6 +379,11 @@
       const wrap = document.getElementById("b-supname-wrap");
       if (wrap) wrap.style.display = v === "__new" ? "block" : "none";
     };
+    window.onAssetChangeBuy = function () {
+      const a = document.getElementById("b-asset")?.value?.trim() || "USDT";
+      if (document.getElementById("b-asset-label")) document.getElementById("b-asset-label").textContent = a;
+      if (document.getElementById("b-asset-label2")) document.getElementById("b-asset-label2").textContent = a;
+    };
     window.calcBuyTotal = function () {
       const u = parseFloat(document.getElementById("b-usdt")?.value) || 0;
       const r = parseFloat(document.getElementById("b-rate")?.value) || 0;
@@ -368,6 +392,7 @@
     };
     window.submitBuy = async function () {
       const date = document.getElementById("b-date")?.value;
+      const asset = document.getElementById("b-asset")?.value?.trim() || "USDT";
       const supId = document.getElementById("b-sup")?.value;
       const supName = supId === "__new"
         ? document.getElementById("b-supname")?.value?.trim()
@@ -381,7 +406,7 @@
       if (!usdt || !rate || !walletId || !accountId || !supName) return alert("Preenche todos os campos obrigatórios.");
 
       const lot = {
-        id: uid(), date, supplierName: supName,
+        id: uid(), date, supplierName: supName, asset,
         usdt, rateKz: rate, totalKz: usdt * rate,
         walletId: String(walletId), remaining: usdt,
         notes, createdAt: new Date().toISOString(),
@@ -404,11 +429,12 @@
 
     // ── SELL PAGE ──────────────────────────────────────────────────────
     let sellLots = []; // [{uid, lotId, usdt}]
+    let clientSearch = "";
+    let sellAsset = "USDT";
 
     function pageSell() {
-      const availLots = db.lots.filter(l => Number(l.remaining || 0) > 0).sort((a, b) => new Date(a.date) - new Date(b.date));
+      const availLots = db.lots.filter(l => Number(l.remaining || 0) > 0 && (l.asset || "USDT") === sellAsset).sort((a, b) => new Date(a.date) - new Date(b.date));
       const rate = parseFloat(document.getElementById("s-rate")?.value) || 0;
-
       let totalUsdt = 0, totalRevenue = 0, totalProfit = 0;
       const breakdown = sellLots.map(entry => {
         const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
@@ -425,7 +451,12 @@
       <div class="sec-title">Registar Venda de USDT</div>
       <div class="form-grid">
         <div class="field"><label>Data *</label><input type="date" id="s-date" value="${today()}"/></div>
-        <div class="field"><label>Câmbio de Venda (Kz/USDT) *</label><input type="number" id="s-rate" placeholder="ex: 6500" oninput="refreshSell()"/></div>
+        <div class="field"><label>Ativo a Vender *</label>
+          <select id="s-asset" onchange="onSellAssetChange(this.value)">
+            ${[...new Set(db.lots.map(l => l.asset || "USDT"))].map(a => `<option value="${a}" ${a === sellAsset ? "selected" : ""}>${a}</option>`).join("") || `<option value="USDT">USDT</option>`}
+          </select>
+        </div>
+        <div class="field"><label>Câmbio de Venda (Kz/${sellAsset}) *</label><input type="number" id="s-rate" placeholder="ex: 1150" value="${rate || ""}" oninput="refreshSell()"/></div>
         <div class="field"><label>Cliente</label>
           <select id="s-client" onchange="document.getElementById('s-aff').value=''">
             <option value="">— Seleccionar —</option>
@@ -464,15 +495,16 @@
                 <div><label>Lote</label>
                   <select onchange="updateSellLot('${entry.uid}','lotId',this.value)">
                     <option value="">— Seleccionar —</option>
-                    ${availLots.map(l => `<option value="${l.id}" ${String(l.id) === String(entry.lotId) ? "selected" : ""}>${l.supplierName} · ${Number(l.rateKz).toLocaleString()} Kz · ${fU(l.remaining)} disp.</option>`).join("")}
+                    ${availLots.map(l => `<option value="${l.id}" ${String(l.id) === String(entry.lotId) ? "selected" : ""}>${l.supplierName} · ${Number(l.rateKz).toLocaleString()} Kz · ${fAsset(l.remaining, sellAsset)} disp.</option>`).join("")}
                   </select>
                 </div>
-                <div><label>Qtd USDT${lot ? ` (max ${Number(lot.remaining).toFixed(2)})` : ""}
-                </label><input type="number" min="0" step="0.01" value="${entry.usdt || ""}" placeholder="ex: 200" oninput="updateSellLot('${entry.uid}','usdt',this.value)"/></div>
+                <div><label>Qtd ${sellAsset}${lot ? ` (max ${Number(lot.remaining).toFixed(2)})` : ""}                </label>
+                  <input type="number" min="0" step="0.01" value="${entry.usdt || ""}" placeholder="ex: 200" oninput="updateSellLot('${entry.uid}','usdt',this.value)"/>
+                </div>
                 <button class="btn-danger" onclick="removeSellLot('${entry.uid}')" style="align-self:flex-end">✕</button>
-              </div>
-              ${lot && entry.usdt && rate ? `<div style="margin-top:6px;font-size:11px;color:#666">
-                Comprado a <span style="color:#c9a84c">${Number(lot.rateKz).toLocaleString()} Kz</span> · Spread: <span style="color:${spreadColor}">${spread}</span>
+                </div>
+                ${lot && entry.usdt && rate ? `<div style="margin-top:6px;font-size:11px;color:#666">
+                  Comprado a <span style="color:#c9a84c">${Number(lot.rateKz).toLocaleString()} Kz</span> · Spread: <span style="color:${spreadColor}">${spread}</span>
               </div>`: ""}
             </div>`;
       }).join("")}
@@ -481,7 +513,12 @@
       <button class="btn-primary" style="width:100%;margin-top:14px" onclick="submitSell()">REGISTAR VENDA</button>
     </div>
 
-    <div>
+    <div id="sell-summary-wrap">${buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown)}</div>
+  </div>`;
+    }
+
+    function buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown) {
+      return `
       <div class="card" style="margin-bottom:16px">
         <div class="sec-title">Resumo da Venda</div>
         <div class="row"><span>Total USDT</span><span style="color:#7eb8f7;font-weight:700">${fU(totalUsdt)}</span></div>
@@ -503,15 +540,27 @@
           </div>
           <div style="font-size:10px;color:#555;margin-top:2px">Spread: ${fKz(rate - Number(b.lot.rateKz))} / USDT</div>
         </div>`).join("")}
-      </div>`: ""}
-    </div>
-  </div>`;
+      </div>`: ""}`;
     }
 
     window.addSellLot = function () { sellLots.push({ uid: uid(), lotId: "", usdt: "" }); render(); };
     window.removeSellLot = function (u) { sellLots = sellLots.filter(l => String(l.uid) !== String(u)); render(); };
     window.updateSellLot = function (u, k, v) { sellLots = sellLots.map(l => String(l.uid) === String(u) ? { ...l, [k]: v } : l); render(); };
-    window.refreshSell = function () { render(); };
+    window.refreshSell = function () {
+      const rate = parseFloat(document.getElementById("s-rate")?.value) || 0;
+      let totalUsdt = 0, totalRevenue = 0, totalProfit = 0;
+      const breakdown = sellLots.map(entry => {
+        const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
+        if (!lot || !entry.usdt) return null;
+        const u = Number(entry.usdt);
+        const profit = u * (rate - Number(lot.rateKz));
+        totalUsdt += u; totalRevenue += u * rate; totalProfit += profit;
+        return { lot, u, profit };
+      }).filter(Boolean);
+      const wrap = document.getElementById("sell-summary-wrap");
+      if (wrap) wrap.innerHTML = buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown);
+    };
+    window.onSellAssetChange = function (v) { sellAsset = v; sellLots = []; render(); };
 
     window.submitSell = async function () {
       const date = document.getElementById("s-date")?.value;
@@ -540,7 +589,7 @@
       const sale = {
         id: uid(), date, createdAt: new Date().toISOString(),
         clientId: clientId || null, affiliateId: affId || null,
-        rateKz, totalUsdt, totalRevenue, totalProfit, lotEntries,
+        rateKz, totalUsdt, totalRevenue, totalProfit, lotEntries, asset: sellAsset,
         accountId: String(accountId), notes,
       };
 
@@ -569,93 +618,141 @@
     function pageStock() {
       const active = db.lots.filter(l => Number(l.remaining || 0) > 0);
       const exhausted = db.lots.filter(l => Number(l.remaining || 0) <= 0);
+      const stockByAsset = {}; active.forEach(l => { const a = l.asset || "USDT"; stockByAsset[a] = (stockByAsset[a] || 0) + Number(l.remaining || 0); });
+      const stockStr = Object.entries(stockByAsset).map(([a, v]) => fAsset(v, a)).join(" · ") || "0";
       return `
-  <div class="grid4" style="margin-bottom:20px">
-    ${statCard("Lotes Activos", active.length, "#50c878", "◈")}
-    ${statCard("USDT Disponível", fU(active.reduce((s, l) => s + Number(l.remaining), 0)), "#7eb8f7", "◆")}
-    ${statCard("Valor em Stock", fKz(active.reduce((s, l) => s + Number(l.remaining) * Number(l.rateKz), 0)), "#c9a84c", "▣")}
-    ${statCard("Lotes Esgotados", exhausted.length, "#555", "○")}
-  </div>
-  <div class="card" style="margin-bottom:16px">
-    <div class="sec-title">Lotes com Stock Disponível</div>
-    ${active.length === 0 ? '<div class="empty">SEM STOCK — COMPRA USDT PARA CRIAR LOTES</div>' : `
-    <div style="overflow-x:auto"><table class="tbl">
-      <thead><tr><th>Data</th><th>Fornecedor</th><th>Comprado</th><th>Câmbio</th><th>Restante</th><th>Custo Restante</th><th>Carteira</th><th></th></tr></thead>
-      <tbody>${active.map(l => {
+      <div class="grid4" style="margin-bottom:20px">
+        ${statCard("Lotes Activos", active.length, "#50c878", "◈")}
+        ${statCard("Disponível", stockStr, "#7eb8f7", "◆")}        ${statCard("Valor em Stock", fKz(active.reduce((s, l) => s + Number(l.remaining) * Number(l.rateKz), 0)), "#c9a84c", "▣")}
+        ${statCard("Lotes Esgotados", exhausted.length, "#555", "○")}
+      </div>
+      <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="sec-title" style="margin:0">Lotes com Stock Disponível</div>
+        <button class="btn-danger" onclick="resetCollection('lots','Lotes')">🗑 APAGAR TODOS OS LOTES</button>
+      </div>        
+      ${active.length === 0 ? '<div class="empty">SEM STOCK — COMPRA USDT PARA CRIAR LOTES</div>' : `
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Data</th><th>Fornecedor</th><th>Ativo</th><th>Comprado</th><th>Câmbio</th><th>Restante</th><th>Custo Restante</th><th>Carteira</th><th></th></tr></thead>
+          <tbody>${active.map(l => {
         const w = db.wallets.find(w => String(w.id) === String(l.walletId));
+        const asset = l.asset || "USDT";
         return `<tr>
           <td>${fDate(l.date)}</td>
           <td style="font-weight:700">${l.supplierName}</td>
-          <td style="color:#7eb8f7">${fU(l.usdt)}</td>
+          <td style="color:#c084fc">${asset}</td>
+          <td style="color:#7eb8f7">${fAsset(l.usdt, asset)}</td>
           <td style="color:#c9a84c">${Number(l.rateKz).toLocaleString()} Kz</td>
-          <td><div style="color:#50c878;font-weight:700">${fU(l.remaining)}</div><div style="font-size:10px;color:#555">${(l.remaining / l.usdt * 100).toFixed(0)}%</div></td>
+          <td><div style="color:#50c878;font-weight:700">${fAsset(l.remaining, asset)}</div><div style="font-size:10px;color:#555">${(l.remaining / l.usdt * 100).toFixed(0)}%</div></td>
           <td>${fKz(l.remaining * l.rateKz)}</td>
           <td style="color:#777">${w?.name || "—"}</td>
           <td><button class="btn-danger" onclick="delLot('${l.id}')">✕</button></td>
         </tr>`;
       }).join("")}</tbody>
-    </table></div>`}
-  </div>
-  ${exhausted.length > 0 ? `
-  <div class="card" style="opacity:.6">
-    <div class="sec-title" style="color:#555">Lotes Esgotados</div>
-    <div style="overflow-x:auto"><table class="tbl">
-      <thead><tr><th>Data</th><th>Fornecedor</th><th>USDT</th><th>Câmbio</th><th>Carteira</th><th></th></tr></thead>
-      <tbody>${exhausted.map(l => {
+        </table></div>`}
+      </div>
+      ${exhausted.length > 0 ? `
+      <div class="card" style="opacity:.6">
+        <div class="sec-title" style="color:#555">Lotes Esgotados</div>
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Data</th><th>Fornecedor</th><th>Ativo</th><th>Qtd</th><th>Câmbio</th><th>Carteira</th><th></th></tr></thead>
+          <tbody>${exhausted.map(l => {
         const w = db.wallets.find(w => String(w.id) === String(l.walletId));
-        return `<tr><td>${fDate(l.date)}</td><td>${l.supplierName}</td><td>${fU(l.usdt)}</td><td>${Number(l.rateKz).toLocaleString()} Kz</td><td>${w?.name || "—"}</td><td><button class="btn-danger" onclick="delLot('${l.id}')">✕</button></td></tr>`;
+        const asset = l.asset || "USDT";
+        return `<tr><td>${fDate(l.date)}</td><td>${l.supplierName}</td><td style="color:#c084fc">${asset}</td><td>${fAsset(l.usdt, asset)}</td><td>${Number(l.rateKz).toLocaleString()} Kz</td><td>${w?.name || "—"}</td><td><button class="btn-danger" onclick="delLot('${l.id}')">✕</button></td></tr>`;
       }).join("")}</tbody>
-    </table></div>
-  </div>`: ""}`;
+            </table></div>
+      </div>`: ""}`;
     }
     window.delLot = async function (id) { if (confirm("Eliminar lote?")) await delDoc("lots", id); };
 
     // ── CLIENTS ────────────────────────────────────────────────────────
     function pageClients() {
       return `
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
     <div style="font-size:11px;color:#555;letter-spacing:2px">${db.clients.length} CLIENTES</div>
     <button class="btn-primary" onclick="openModal('new-client')">+ NOVO CLIENTE</button>
   </div>
-  <div class="card" style="overflow-x:auto">
-    ${db.clients.length === 0 ? '<div class="empty">SEM CLIENTES</div>' : `
-    <table class="tbl"><thead><tr><th>Nome</th><th>Telefone</th><th>Compras</th><th>Volume USDT</th><th>Lucro Gerado</th><th></th></tr></thead>
-    <tbody>${db.clients.map(c => {
+  <div class="field" style="margin-bottom:16px">
+    <input id="client-search" placeholder="🔍 Pesquisar por nome, telefone, grupo, quem adicionou ou carteira..." value="${clientSearch}" oninput="searchClients(this.value)"/>
+  </div>
+  <div id="client-table-wrap">${buildClientsTable()}</div>
+  ${buildClientModal()}`;
+    }
+
+    function buildClientsTable() {
+      const q = clientSearch.trim().toLowerCase();
+      const filtered = db.clients.filter(c => {
+        if (!q) return true;
+        const hay = [c.name, c.phone, c.groupName, c.addedBy, ...(c.walletIds || [])].join(" ").toLowerCase();
+        return hay.includes(q);
+      });
+      return `<div class="card" style="overflow-x:auto">
+      ${filtered.length === 0 ? '<div class="empty">SEM CLIENTES (ou sem resultados para a pesquisa)</div>' : `
+      <table class="tbl"><thead><tr><th>Nome</th><th>Telefone</th><th>Grupo</th><th>Adicionado por</th><th>Carteiras</th><th>Compras</th><th>Volume USDT</th><th>Lucro Gerado</th><th></th></tr></thead>
+      <tbody>${filtered.map(c => {
         const ss = db.sales.filter(s => String(s.clientId) === String(c.id));
         const vol = ss.reduce((a, s) => a + Number(s.totalUsdt || 0), 0);
         const prf = ss.reduce((a, s) => a + Number(s.totalProfit || 0), 0);
         return `<tr>
-        <td style="font-weight:700;color:#e8e4d9">${c.name}</td>
-        <td style="color:#777">${c.phone || "—"}</td>
-        <td style="color:#c9a84c">${ss.length}</td>
-        <td style="color:#7eb8f7">${fU(vol)}</td>
-        <td style="color:${prf >= 0 ? "#50c878" : "#ff5050"}">${fKz(prf)}</td>
-        <td><button class="btn-danger" onclick="delClient('${c.id}')">✕</button></td>
-      </tr>`;
+          <td style="font-weight:700;color:#e8e4d9">${c.name}</td>
+          <td style="color:#777">${c.phone || "—"}</td>
+          <td style="color:#7eb8f7">${c.groupName || "—"}</td>
+          <td style="color:#777">${c.addedBy || "—"}</td>
+          <td style="color:#555;font-size:11px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(c.walletIds || []).join(", ") || "—"}</td>
+          <td style="color:#c9a84c">${ss.length}</td>
+          <td style="color:#7eb8f7">${fU(vol)}</td>
+          <td style="color:${prf >= 0 ? "#50c878" : "#ff5050"}">${fKz(prf)}</td>
+          <td style="display:flex;gap:4px">
+            <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="openModal('new-client','${c.id}')">✎</button>
+            <button class="btn-danger" onclick="delClient('${c.id}')">✕</button>
+          </td>
+        </tr>`;
       }).join("")}</tbody></table>`}
-  </div>
-  ${buildClientModal()}`;
+      </div>`;
     }
+
+    window.searchClients = function (v) {
+      clientSearch = v;
+      const wrap = document.getElementById("client-table-wrap");
+      if (wrap) wrap.innerHTML = buildClientsTable();
+    };
+
     window.delClient = async function (id) { if (confirm("Eliminar cliente?")) await delDoc("clients", id); };
-    window.openModal = function (t) { modalState = { type: t }; render(); };
+    window.openModal = function (t, editId = null) { modalState = { type: t, editId }; render(); };
     window.closeModal = function () { modalState = null; render(); };
+
     function buildClientModal() {
       if (modalState?.type !== "new-client") return "";
+      const editing = modalState.editId ? db.clients.find(c => String(c.id) === String(modalState.editId)) : null;
       return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
-    <div class="modal-title">NOVO CLIENTE</div>
-    <div class="field" style="margin-bottom:12px"><label>Nome *</label><input id="nc-name" placeholder="Nome completo"/></div>
-    <div class="field" style="margin-bottom:12px"><label>Telefone / WhatsApp</label><input id="nc-phone" placeholder="+244 9XX XXX XXX"/></div>
-    <div class="field" style="margin-bottom:20px"><label>Notas</label><textarea id="nc-notes" rows="3" style="resize:vertical"></textarea></div>
-    <div style="display:flex;gap:12px">
-      <button class="btn-primary" style="flex:1" onclick="saveClient()">GUARDAR</button>
-      <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
-    </div>
-  </div></div>`;
+        <div class="modal-title">${editing ? "EDITAR CLIENTE" : "NOVO CLIENTE"}</div>
+        <div class="field" style="margin-bottom:12px"><label>Nome *</label><input id="nc-name" placeholder="Nome completo" value="${editing?.name || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>Telefone / WhatsApp</label><input id="nc-phone" placeholder="+244 9XX XXX XXX" value="${editing?.phone || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>Nome do Grupo</label><input id="nc-group" placeholder="ex: Grupo VIP Luanda" value="${editing?.groupName || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>Quem Adicionou ao Grupo</label><input id="nc-addedby" placeholder="ex: Ivandro / Nome do Afiliado" value="${editing?.addedBy || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>IDs/Endereços das Carteiras (uma por linha)</label><textarea id="nc-wallets" rows="3" style="resize:vertical" placeholder="ex: TXk3...abc&#10;0xAb12...">${(editing?.walletIds || []).join("\n")}</textarea></div>
+        <div class="field" style="margin-bottom:20px"><label>Notas</label><textarea id="nc-notes" rows="3" style="resize:vertical">${editing?.notes || ""}</textarea></div>
+        <div style="display:flex;gap:12px">
+          <button class="btn-primary" style="flex:1" onclick="saveClient()">GUARDAR</button>
+          <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+        </div>
+      </div></div>`;
     }
+
     window.saveClient = async function () {
       const name = document.getElementById("nc-name")?.value?.trim();
       if (!name) return alert("Nome obrigatório.");
-      await saveDoc("clients", { id: uid(), name, phone: document.getElementById("nc-phone")?.value || "", notes: document.getElementById("nc-notes")?.value || "" });
+      const id = modalState?.editId || uid();
+      const walletIds = (document.getElementById("nc-wallets")?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+      await saveDoc("clients", {
+        id, name,
+        phone: document.getElementById("nc-phone")?.value || "",
+        groupName: document.getElementById("nc-group")?.value || "",
+        addedBy: document.getElementById("nc-addedby")?.value || "",
+        walletIds,
+        notes: document.getElementById("nc-notes")?.value || ""
+      });
       closeModal();
     };
 
@@ -700,98 +797,199 @@
     // ── AFFILIATES ─────────────────────────────────────────────────────
     function pageAffiliates() {
       return `
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-    <div style="font-size:11px;color:#555;letter-spacing:2px">${db.affiliates.length} AFILIADOS</div>
-    <button class="btn-primary" onclick="openModal('new-aff')">+ NOVO AFILIADO</button>
-  </div>
-  <div class="card" style="overflow-x:auto;margin-bottom:16px">
-    ${db.affiliates.length === 0 ? '<div class="empty">SEM AFILIADOS</div>' : `
-    <table class="tbl"><thead><tr><th>Nome</th><th>Telefone</th><th>Vendas</th><th>Volume USDT</th><th></th></tr></thead>
-    <tbody>${db.affiliates.map(a => {
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+        <div style="font-size:11px;color:#555;letter-spacing:2px">${db.affiliates.length} AFILIADOS</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-danger" onclick="resetCollection('affiliates','Afiliados')">🗑 APAGAR TODOS</button>
+          <button class="btn-primary" onclick="openModal('new-aff')">+ NOVO AFILIADO</button>
+        </div>
+      </div>
+      <div class="card" style="overflow-x:auto;margin-bottom:16px">
+        ${db.affiliates.length === 0 ? '<div class="empty">SEM AFILIADOS</div>' : `
+        <table class="tbl"><thead><tr><th>Nome</th><th>Telefone</th><th>Vendas</th><th>Volume USDT</th><th></th></tr></thead>
+        <tbody>${db.affiliates.map(a => {
         const ss = db.sales.filter(s => String(s.affiliateId) === String(a.id));
-        return `<tr>
-        <td style="font-weight:700">${a.name}</td>
-        <td style="color:#777">${a.phone || "—"}</td>
-        <td style="color:#c9a84c">${ss.length}</td>
-        <td style="color:#7eb8f7">${fU(ss.reduce((s, x) => s + Number(x.totalUsdt || 0), 0))}</td>
-        <td><button class="btn-danger" onclick="delAff('${a.id}')">✕</button></td>
-      </tr>`;
+        return `
+          <tr>
+            <td style="font-weight:700">${a.name}</td>
+            <td style="color:#777">${a.phone || "—"}</td>
+            <td style="color:#c9a84c">${ss.length}</td>
+            <td style="color:#7eb8f7">${fU(ss.reduce((s, x) => s + Number(x.totalUsdt || 0), 0))}</td>
+            <td style="display:flex;gap:4px">
+            <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="openModal('new-aff','${a.id}')">✎</button>
+            <button class="btn-danger" onclick="delAff('${a.id}')">✕</button>
+            </td>          
+          </tr>`;
       }).join("")}</tbody></table>`}
-  </div>
-  <div class="card" style="background:rgba(201,168,76,.04);border-color:rgba(201,168,76,.15)">
-    <div style="font-size:11px;color:#c9a84c;letter-spacing:2px;margin-bottom:8px">💡 NOTA SOBRE AFILIADOS</div>
-    <div style="font-size:12px;color:#888;line-height:1.8">Ao vender a um afiliado, usa o mesmo câmbio de compra — o lucro será próximo de zero. O valor está na expansão da rede e no reconhecimento da Kâmbio Business.</div>
-  </div>
-  ${buildAffModal()}`;
+      </div>
+      <div class="card" style="background:rgba(201,168,76,.04);border-color:rgba(201,168,76,.15)">
+        <div style="font-size:11px;color:#c9a84c;letter-spacing:2px;margin-bottom:8px">💡 NOTA SOBRE AFILIADOS</div>
+        <div style="font-size:12px;color:#888;line-height:1.8">Ao vender a um afiliado, usa o mesmo câmbio de compra — o lucro será próximo de zero. O valor está na expansão da rede e no reconhecimento da Kâmbio Business.</div>
+      </div>
+      ${buildAffModal()}`;
     }
     window.delAff = async function (id) { if (confirm("Eliminar afiliado?")) await delDoc("affiliates", id); };
     function buildAffModal() {
       if (modalState?.type !== "new-aff") return "";
+      const editing = modalState.editId ? db.affiliates.find(a => String(a.id) === String(modalState.editId)) : null;
       return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
-    <div class="modal-title">NOVO AFILIADO</div>
-    <div class="field" style="margin-bottom:12px"><label>Nome *</label><input id="na-name" placeholder="Nome / empresa"/></div>
-    <div class="field" style="margin-bottom:12px"><label>Telefone</label><input id="na-phone" placeholder="+244 9XX XXX XXX"/></div>
-    <div class="field" style="margin-bottom:20px"><label>Notas</label><textarea id="na-notes" rows="3" style="resize:vertical"></textarea></div>
-    <div style="display:flex;gap:12px">
-      <button class="btn-primary" style="flex:1" onclick="saveAff()">GUARDAR</button>
-      <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
-    </div>
-  </div></div>`;
+        <div class="modal-title">${editing ? "EDITAR AFILIADO" : "NOVO AFILIADO"}</div>
+        <div class="field" style="margin-bottom:12px"><label>Nome *</label><input id="na-name" placeholder="Nome / empresa" value="${editing?.name || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>Telefone</label><input id="na-phone" placeholder="+244 9XX XXX XXX" value="${editing?.phone || ""}"/></div>
+        <div class="field" style="margin-bottom:20px"><label>Notas</label><textarea id="na-notes" rows="3" style="resize:vertical">${editing?.notes || ""}</textarea></div>
+        <div style="display:flex;gap:12px">
+          <button class="btn-primary" style="flex:1" onclick="saveAff()">GUARDAR</button>
+          <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+        </div>
+      </div></div>`;
     }
     window.saveAff = async function () {
       const name = document.getElementById("na-name")?.value?.trim();
       if (!name) return alert("Nome obrigatório.");
-      await saveDoc("affiliates", { id: uid(), name, phone: document.getElementById("na-phone")?.value || "", notes: document.getElementById("na-notes")?.value || "" });
+      const id = modalState?.editId || uid();
+      await saveDoc("affiliates", { id, name, phone: document.getElementById("na-phone")?.value || "", notes: document.getElementById("na-notes")?.value || "" });
       closeModal();
     };
 
     // ── WALLETS ────────────────────────────────────────────────────────
     function pageWallets() {
-      const tU = db.wallets.reduce((s, w) => s + Number(w.balance || 0), 0);
+      const assetTotals = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; assetTotals[a] = (assetTotals[a] || 0) + Number(w.balance || 0); });
       const tK = db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0);
       return `
-  <div class="grid2">
-    <div class="card">
-      <div class="sec-title">Carteiras USDT</div>
-      ${db.wallets.map(w => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="flex:1;font-size:13px;color:#ccc">${w.name}</span>
-        <input type="number" style="width:130px" value="${w.balance}" onchange="adjWallet('${w.id}',this.value)"/>
-        <span style="font-size:11px;color:#555;width:45px">USDT</span>
-        <button class="btn-danger" onclick="delWallet('${w.id}')">✕</button>
-      </div>`).join("")}
-      <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
-        <div class="row bold"><span>TOTAL</span><span style="color:#7eb8f7">${fU(tU)}</span></div>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:14px">
-        <input id="nw-name" placeholder="Nova carteira" style="flex:1"/>
-        <input id="nw-bal" type="number" placeholder="Saldo" style="width:100px"/>
-        <button class="btn-ghost" onclick="addWallet()">+</button>
-      </div>
-    </div>
-    <div class="card">
-      <div class="sec-title">Contas em Kwanzas</div>
-      ${db.accounts.map(a => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="flex:1;font-size:13px;color:#ccc">${a.name}</span>
-        <input type="number" style="width:130px" value="${a.balance}" onchange="adjAccount('${a.id}',this.value)"/>
-        <span style="font-size:11px;color:#555;width:30px">Kz</span>
-        <button class="btn-danger" onclick="delAccount('${a.id}')">✕</button>
-      </div>`).join("")}
-      <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
-        <div class="row bold"><span>TOTAL</span><span style="color:#c9a84c">${fKz(tK)}</span></div>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:14px">
-        <input id="na2-name" placeholder="Nova conta" style="flex:1"/>
-        <input id="na2-bal" type="number" placeholder="Saldo" style="width:100px"/>
-        <button class="btn-ghost" onclick="addAccount2()">+</button>
-      </div>
-    </div>
-  </div>`;
+      <div class="grid2">
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="sec-title" style="margin:0">Carteiras (Multi-Ativo)</div>
+          <button class="btn-danger" onclick="resetCollection('wallets','Carteiras')">🗑</button>
+        </div>
+          ${db.wallets.map(w => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="flex:1;font-size:13px;color:#ccc">${w.name}</span>
+            <input type="number" style="width:120px" value="${w.balance}" onchange="adjWallet('${w.id}',this.value)"/>
+            <span style="font-size:11px;color:#555;width:45px">${w.asset || "USDT"}</span>
+            <button class="btn-danger" onclick="delWallet('${w.id}')">✕</button>
+          </div>`).join("")}
+          <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+            ${Object.entries(assetTotals).map(([a, v]) => `<div class="row bold"><span>TOTAL ${a}</span><span style="color:#7eb8f7">${fAsset(v, a)}</span></div>`).join("")}
+          </div>
+          <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+            <input id="nw-name" placeholder="Nova carteira" style="flex:1;min-width:100px"/>
+            <input id="nw-bal" type="number" placeholder="Saldo" style="width:90px"/>
+            <input list="asset-options" id="nw-asset" placeholder="Ativo" style="width:90px"/>
+            <datalist id="asset-options"><option value="USDT"></option><option value="USDC"></option><option value="EUR"></option><option value="USD"></option></datalist>
+            <button class="btn-ghost" onclick="addWallet()">+</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="sec-title">Contas em Kwanzas</div>
+          ${db.accounts.map(a => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="flex:1;font-size:13px;color:#ccc">${a.name}</span>
+            <input type="number" style="width:130px" value="${a.balance}" onchange="adjAccount('${a.id}',this.value)"/>
+            <span style="font-size:11px;color:#555;width:30px">Kz</span>
+            <button class="btn-danger" onclick="delAccount('${a.id}')">✕</button>
+          </div>`).join("")}
+          <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+            <div class="row bold"><span>TOTAL</span><span style="color:#c9a84c">${fKz(tK)}</span></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:14px">
+            <input id="na2-name" placeholder="Nova conta" style="flex:1"/>
+            <input id="na2-bal" type="number" placeholder="Saldo" style="width:100px"/>
+            <button class="btn-ghost" onclick="addAccount2()">+</button>
+          </div>
+        </div>
+      </div>`;
     }
+
+    function pageTransfers() {
+      const history = [...db.transfers].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 15);
+      const fromId = document.getElementById("tr-from")?.value;
+      const fromWallet = db.wallets.find(w => String(w.id) === String(fromId));
+      const asset = fromWallet?.asset || "USDT";
+      return `
+      <div class="grid2">
+        <div class="card">
+          <div class="sec-title">Transferir Entre Carteiras</div>
+          <div class="form-grid">
+            <div class="field"><label>Data *</label><input type="date" id="tr-date" value="${today()}"/></div>
+            <div class="field"><label>Carteira de Origem *</label>
+              <select id="tr-from" onchange="renderTransfersForm()">
+                <option value="">— Seleccionar —</option>
+                ${db.wallets.map(w => `<option value="${w.id}" ${String(w.id) === String(fromId) ? "selected" : ""}>${w.name} · ${w.asset || "USDT"} (${fAsset(w.balance, w.asset || "USDT")})</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label>Carteira de Destino *</label>
+              <select id="tr-to">
+                <option value="">— Seleccionar —</option>
+                ${db.wallets.filter(w => String(w.id) !== String(fromId) && (w.asset || "USDT") === asset).map(w => `<option value="${w.id}">${w.name} (${fAsset(w.balance, w.asset || "USDT")})</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label>Quantidade a Transferir (${asset}) *</label><input type="number" id="tr-amount" placeholder="ex: 100" step="0.0001"/></div>
+            <div class="field"><label>Taxa da Transação (${asset}, opcional)</label><input type="number" id="tr-fee" placeholder="ex: 1" step="0.0001" value="0"/></div>
+            <div class="field full"><label>Notas</label><input type="text" id="tr-notes" placeholder="Opcional..."/></div>
+          </div>
+          <div style="font-size:11px;color:#555;margin-top:10px">A carteira de destino só pode receber o mesmo ativo (${asset}) da carteira de origem.</div>
+          <button class="btn-primary" style="width:100%;margin-top:16px" onclick="submitTransfer()">REGISTAR TRANSFERÊNCIA</button>
+        </div>
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="sec-title" style="margin:0">Histórico de Transferências</div>
+          <button class="btn-danger" onclick="resetCollection('transfers','Transferências')" style="font-size:10px">🗑</button>
+        </div>
+          ${history.length === 0 ? '<div class="empty">SEM TRANSFERÊNCIAS</div>' : `
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Data</th><th>De</th><th>Para</th><th>Qtd</th><th>Taxa</th></tr></thead>
+            <tbody>${history.map(t => {
+        const wf = db.wallets.find(w => String(w.id) === String(t.fromId));
+        const wt = db.wallets.find(w => String(w.id) === String(t.toId));
+        return `<tr>
+                <td>${fDate(t.date)}</td>
+                <td style="color:#777">${wf?.name || "—"}</td>
+                <td style="color:#777">${wt?.name || "—"}</td>
+                <td style="color:#7eb8f7">${fAsset(t.amount, t.asset)}</td>
+                <td style="color:#ff7850">${fAsset(t.fee, t.asset)}</td>
+              </tr>`;
+      }).join("")}</tbody>
+          </table></div>`}
+        </div>
+      </div>`;
+    }
+
+    window.renderTransfersForm = function () { render(); };
+
+    window.submitTransfer = async function () {
+      const date = document.getElementById("tr-date")?.value;
+      const fromId = document.getElementById("tr-from")?.value;
+      const toId = document.getElementById("tr-to")?.value;
+      const amount = parseFloat(document.getElementById("tr-amount")?.value) || 0;
+      const fee = parseFloat(document.getElementById("tr-fee")?.value) || 0;
+      const notes = document.getElementById("tr-notes")?.value || "";
+
+      if (!fromId || !toId || !amount) return alert("Preenche carteira de origem, destino e quantidade.");
+      if (fromId === toId) return alert("A carteira de origem e destino não podem ser iguais.");
+
+      const fromWallet = db.wallets.find(w => String(w.id) === String(fromId));
+      const toWallet = db.wallets.find(w => String(w.id) === String(toId));
+      if (!fromWallet || !toWallet) return alert("Carteira inválida.");
+      if ((fromWallet.asset || "USDT") !== (toWallet.asset || "USDT")) return alert("As carteiras devem ter o mesmo ativo.");
+      if (amount > Number(fromWallet.balance)) return alert("Saldo insuficiente na carteira de origem.");
+
+      const received = amount - fee;
+      const asset = fromWallet.asset || "USDT";
+      const transfer = { id: uid(), date, fromId: String(fromId), toId: String(toId), amount, fee, received, asset, notes, createdAt: new Date().toISOString() };
+
+      await bulkSave([
+        { col: "transfers", item: transfer },
+        { col: "wallets", item: { ...fromWallet, balance: Number(fromWallet.balance) - amount } },
+        { col: "wallets", item: { ...toWallet, balance: Number(toWallet.balance) + received } },
+      ]);
+      alert("✅ Transferência registada!");
+      render();
+    };
+
     window.adjWallet = async (id, v) => { const w = db.wallets.find(x => String(x.id) === String(id)); if (w) await saveDoc("wallets", { ...w, balance: parseFloat(v) || 0 }); };
     window.delWallet = async (id) => { if (confirm("Eliminar carteira?")) await delDoc("wallets", id); };
     window.adjAccount = async (id, v) => { const a = db.accounts.find(x => String(x.id) === String(id)); if (a) await saveDoc("accounts", { ...a, balance: parseFloat(v) || 0 }); };
     window.delAccount = async (id) => { if (confirm("Eliminar conta?")) await delDoc("accounts", id); };
-    window.addWallet = async () => { const n = document.getElementById("nw-name")?.value?.trim(); if (!n) return; await saveDoc("wallets", { id: uid(), name: n, balance: parseFloat(document.getElementById("nw-bal")?.value) || 0 }); };
+    window.addWallet = async () => { const n = document.getElementById("nw-name")?.value?.trim(); if (!n) return; await saveDoc("wallets", { id: uid(), name: n, balance: parseFloat(document.getElementById("nw-bal")?.value) || 0, asset: document.getElementById("nw-asset")?.value?.trim() || "USDT" }); };
     window.addAccount2 = async () => { const n = document.getElementById("na2-name")?.value?.trim(); if (!n) return; await saveDoc("accounts", { id: uid(), name: n, balance: parseFloat(document.getElementById("na2-bal")?.value) || 0 }); };
 
     // ── FINANCIAL ──────────────────────────────────────────────────────
@@ -831,7 +1029,10 @@
       <div class="budget-box green"><div class="budget-label">SALÁRIO (30%)</div><div class="budget-val" style="color:#50c878">${fKz(profit * .3)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
       <div class="budget-box gold"><div class="budget-label">POUPANÇA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit * .1)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>    </div>
     <div class="card">
-      <div class="sec-title">Vendas do Período</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="sec-title" style="margin:0">Vendas do Período</div>
+        <button class="btn-danger" onclick="resetCollection('sales','Vendas')" style="font-size:10px">🗑 APAGAR VENDAS</button>
+      </div>
       ${sales.length === 0 ? '<div class="empty">SEM VENDAS</div>' : `
       <div style="overflow-x:auto"><table class="tbl">
         <thead><tr><th>Data</th><th>USDT</th><th>Câmbio</th><th>Receita</th><th>Lucro</th></tr></thead>
@@ -860,13 +1061,17 @@
         <tbody>${db.suppliers.map(s => `<tr>
           <td style="font-weight:700">${s.name}</td>
           <td style="color:#777">${s.phone || "—"}</td>
-          <td><button class="btn-danger" onclick="delSup('${s.id}')">✕</button></td>
+          <td style="display:flex;gap:4px">
+            <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="editSup('${s.id}')">✎</button>
+            <button class="btn-danger" onclick="delSup('${s.id}')">✕</button>
+          </td>
         </tr>`).join("")}</tbody>
       </table>`}
+      <input type="hidden" id="ns-editid" value=""/>
       <div style="display:flex;gap:8px">
         <input id="ns-name" placeholder="Nome" style="flex:1"/>
         <input id="ns-phone" placeholder="Telefone" style="width:130px"/>
-        <button class="btn-ghost" onclick="addSup()">+</button>
+        <button class="btn-ghost" id="ns-submit" onclick="addSup()">+</button>
       </div>
     </div>
     <div class="card">
@@ -890,8 +1095,24 @@
   </div>`;
     }
     window.delSup = async (id) => { if (confirm("Eliminar?")) await delDoc("suppliers", id); };
-    window.addSup = async () => { const n = document.getElementById("ns-name")?.value?.trim(); if (!n) return; await saveDoc("suppliers", { id: uid(), name: n, phone: document.getElementById("ns-phone")?.value || "" }); };
-    window.exportData = () => {
+    window.addSup = async () => {
+      const editId = document.getElementById("ns-editid")?.value;
+      const n = document.getElementById("ns-name")?.value?.trim();
+      if (!n) return;
+      await saveDoc("suppliers", { id: editId || uid(), name: n, phone: document.getElementById("ns-phone")?.value || "" });
+      document.getElementById("ns-editid").value = "";
+      document.getElementById("ns-name").value = "";
+      document.getElementById("ns-phone").value = "";
+      document.getElementById("ns-submit").textContent = "+";
+    };
+    window.editSup = (id) => {
+      const s = db.suppliers.find(x => String(x.id) === String(id));
+      if (!s) return;
+      document.getElementById("ns-editid").value = s.id;
+      document.getElementById("ns-name").value = s.name;
+      document.getElementById("ns-phone").value = s.phone || "";
+      document.getElementById("ns-submit").textContent = "✓ ATUALIZAR";
+    }; window.exportData = () => {
       const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
       const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `kambio_backup_${today()}.json`; a.click();
     };
@@ -915,6 +1136,13 @@
       localStorage.removeItem(LOCAL_KEY);
       seeded = false;
       alert("Dados apagados."); render();
+    };
+
+    window.resetCollection = async function (col, label) {
+      if (!confirm(`⚠️ Apagar todos os dados de "${label}"? Esta ação é irreversível.`)) return;
+      for (const item of [...db[col]]) await delDoc(col, item.id);
+      alert(`✅ Dados de "${label}" apagados.`);
+      render();
     };
 
     // ══════════════════════════════════════════════════════════════════
