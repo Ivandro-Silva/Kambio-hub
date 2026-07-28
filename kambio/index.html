@@ -193,7 +193,7 @@
         </nav>
         <div class="quick-bal">
           <div style="color:#555;letter-spacing:2px;margin-bottom:8px;font-size:10px">SALDO RÁPIDO</div>
-          ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + Number(w.balance || 0); }); return Object.entries(t).map(([a, v]) => `<div class="qrow"><span>${a}</span><span style="color:#7eb8f7;font-weight:700">${fAsset(v, a)}</span></div>`).join(""); })()}
+          ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + walletBalance(w.id); }); return Object.entries(t).map(([a, v]) => `<div class="qrow"><span>${a}</span><span style="color:#7eb8f7;font-weight:700">${fAsset(v, a)}</span></div>`).join(""); })()}
           <div class="qrow"><span>Kz Total</span><span style="color:#c9a84c;font-weight:700">${fKz(db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0))}</span></div>
           <div id="sync-status" style="margin-top:8px"></div>
         </div>
@@ -272,9 +272,9 @@
   <div class="grid2" style="margin-bottom:20px">
     <div class="card">
       <div class="sec-title">Carteiras (Multi-Ativo)</div>
-      ${db.wallets.map(w => `<div class="row"><span>${w.name} <span style="color:#444">(${w.asset || "USDT"})</span></span><span style="color:#7eb8f7;font-weight:700">${fAsset(w.balance, w.asset || "USDT")}</span></div>`).join("")}
+      ${db.wallets.map(w => `<div class="row"><span>${w.name} <span style="color:#444">(${w.asset || "USDT"})</span></span><span style="color:#7eb8f7;font-weight:700">${fAsset(walletBalance(w.id), w.asset || "USDT")}</span></div>`).join("")}
       <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
-        ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + Number(w.balance || 0); }); return Object.entries(t).map(([a, v]) => `<div class="row bold"><span>TOTAL ${a}</span><span style="color:#7eb8f7">${fAsset(v, a)}</span></div>`).join(""); })()}
+        ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + walletBalance(w.id); }); return Object.entries(t).map(([a, v]) => `<div class="row bold"><span>TOTAL ${a}</span><span style="color:#7eb8f7">${fAsset(v, a)}</span></div>`).join(""); })()}
       </div>
     </div>
     <div class="card">
@@ -334,11 +334,11 @@
           <datalist id="asset-options-buy"><option value="USDT"></option><option value="USDC"></option><option value="EUR"></option><option value="USD"></option></datalist>
         </div>
         <div class="field"><label>Quantidade <span id="b-asset-label">USDT</span> *</label><input type="number" id="b-usdt" placeholder="ex: 500" oninput="calcBuyTotal()"/></div>
-        <div class="field"><label>Câmbio de Compra (Kz/<span id="b-asset-label2">USDT</span>) *</label><input type="number" id="b-rate" placeholder="ex: 6200" oninput="calcBuyTotal()"/></div>        <div class="field"><label>Total a Pagar</label><div class="computed" id="b-total">0,00 Kz</div></div>
+        <div class="field"><label>Câmbio de Compra (Kz/<span id="b-asset-label2">USDT</span>) *</label><input type="number" id="b-rate" placeholder="ex: 1130" oninput="calcBuyTotal()"/></div>        <div class="field"><label>Total a Pagar</label><div class="computed" id="b-total">0,00 Kz</div></div>
         <div class="field"><label>Carteira de Destino *</label>
           <select id="b-wallet">
             <option value="">— Seleccionar —</option>
-            ${db.wallets.map(w => `<option value="${w.id}">${w.name} · ${w.asset || "USDT"} (${fAsset(w.balance, w.asset || "USDT")})</option>`).join("")}
+            ${db.wallets.map(w => `<option value="${w.id}">${w.name} · ${w.asset || "USDT"} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
           </select>
         </div>
         <div class="field"><label>Conta de Pagamento (Kz) *</label>
@@ -863,13 +863,14 @@
           <button class="btn-danger" onclick="resetCollection('wallets','Carteiras')">🗑</button>
         </div>
           ${db.wallets.map(w => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-            <span style="flex:1;font-size:13px;color:#ccc">${w.name}</span>
-            <input type="number" style="width:120px" value="${w.balance}" onchange="adjWallet('${w.id}',this.value)"/>
-            <span style="font-size:11px;color:#555;width:45px">${w.asset || "USDT"}</span>
-            <button class="btn-danger" onclick="delWallet('${w.id}')">✕</button>
+          <span style="flex:1;font-size:13px;color:#ccc">${w.name}</span>
+          <span style="width:120px;text-align:right;color:#50c878;font-weight:700">${fAsset(walletBalance(w.id), w.asset || "USDT")}</span>
+          <span style="font-size:11px;color:#555;width:45px">${w.asset || "USDT"}</span>
+          <button class="btn-danger" onclick="delWallet('${w.id}')">✕</button>
           </div>`).join("")}
+          <div style="font-size:10px;color:#555;margin-bottom:8px">💡 O saldo já não é editável diretamente — vem sempre da soma dos Lotes ativos dessa carteira (Comprar → Stock).</div>
           <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
-            ${Object.entries(assetTotals).map(([a, v]) => `<div class="row bold"><span>TOTAL ${a}</span><span style="color:#7eb8f7">${fAsset(v, a)}</span></div>`).join("")}
+            ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + walletBalance(w.id); }); return Object.entries(t).map(([a, v]) => `<div class="row bold"><span>TOTAL ${a}</span><span style="color:#7eb8f7">${fAsset(v, a)}</span></div>`).join(""); })()}
           </div>
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             <input id="nw-name" placeholder="Nova carteira" style="flex:1;min-width:100px"/>
@@ -898,60 +899,159 @@
         </div>
       </div>`;
     }
+    let transferLots = []; // [{uid, lotId, qty}]
 
     function pageTransfers() {
       const history = [...db.transfers].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 15);
       const fromId = document.getElementById("tr-from")?.value;
       const fromWallet = db.wallets.find(w => String(w.id) === String(fromId));
       const asset = fromWallet?.asset || "USDT";
+      const availLots = fromId ? walletStock(fromId) : [];
+
       return `
-      <div class="grid2">
-        <div class="card">
-          <div class="sec-title">Transferir Entre Carteiras</div>
-          <div class="form-grid">
-            <div class="field"><label>Data *</label><input type="date" id="tr-date" value="${today()}"/></div>
-            <div class="field"><label>Carteira de Origem *</label>
-              <select id="tr-from" onchange="renderTransfersForm()">
-                <option value="">— Seleccionar —</option>
-                ${db.wallets.map(w => `<option value="${w.id}" ${String(w.id) === String(fromId) ? "selected" : ""}>${w.name} · ${w.asset || "USDT"} (${fAsset(w.balance, w.asset || "USDT")})</option>`).join("")}
-              </select>
-            </div>
-            <div class="field"><label>Carteira de Destino *</label>
-              <select id="tr-to">
-                <option value="">— Seleccionar —</option>
-                ${db.wallets.filter(w => String(w.id) !== String(fromId) && (w.asset || "USDT") === asset).map(w => `<option value="${w.id}">${w.name} (${fAsset(w.balance, w.asset || "USDT")})</option>`).join("")}
-              </select>
-            </div>
-            <div class="field"><label>Quantidade a Transferir (${asset}) *</label><input type="number" id="tr-amount" placeholder="ex: 100" step="0.0001"/></div>
-            <div class="field"><label>Taxa da Transação (${asset}, opcional)</label><input type="number" id="tr-fee" placeholder="ex: 1" step="0.0001" value="0"/></div>
-            <div class="field full"><label>Notas</label><input type="text" id="tr-notes" placeholder="Opcional..."/></div>
-          </div>
-          <div style="font-size:11px;color:#555;margin-top:10px">A carteira de destino só pode receber o mesmo ativo (${asset}) da carteira de origem.</div>
-          <button class="btn-primary" style="width:100%;margin-top:16px" onclick="submitTransfer()">REGISTAR TRANSFERÊNCIA</button>
+  <div class="grid2">
+    <div class="card">
+      <div class="sec-title">Transferir Entre Carteiras</div>
+      <div class="form-grid">
+        <div class="field"><label>Data *</label><input type="date" id="tr-date" value="${today()}"/></div>
+        <div class="field"><label>Carteira de Origem *</label>
+          <select id="tr-from" onchange="onTransferFromChange()">
+            <option value="">— Seleccionar —</option>
+            ${db.wallets.map(w => `<option value="${w.id}" ${String(w.id) === String(fromId) ? "selected" : ""}>${w.name} · ${w.asset || "USDT"} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
+          </select>
         </div>
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div class="sec-title" style="margin:0">Histórico de Transferências</div>
-          <button class="btn-danger" onclick="resetCollection('transfers','Transferências')" style="font-size:10px">🗑</button>
+        <div class="field"><label>Carteira de Destino *</label>
+          <select id="tr-to">
+            <option value="">— Seleccionar —</option>
+            ${db.wallets.filter(w => String(w.id) !== String(fromId) && (w.asset || "USDT") === asset).map(w => `<option value="${w.id}">${w.name} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
+          </select>
         </div>
-          ${history.length === 0 ? '<div class="empty">SEM TRANSFERÊNCIAS</div>' : `
-          <div style="overflow-x:auto"><table class="tbl">
-            <thead><tr><th>Data</th><th>De</th><th>Para</th><th>Qtd</th><th>Taxa</th></tr></thead>
-            <tbody>${history.map(t => {
+        <div class="field"><label>Taxa da Transação (${asset}, opcional, aplicada ao total)</label><input type="number" id="tr-fee" placeholder="ex: 1" step="0.0001" value="0" oninput="renderTransfersLots()"/></div>
+        <div class="field full"><label>Notas</label><input type="text" id="tr-notes" placeholder="Opcional..."/></div>
+      </div>
+
+      <div style="margin-top:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:11px;color:#c9a84c;letter-spacing:2px">LOTES A TRANSFERIR</div>
+          <button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="addTransferLot()" ${!fromId ? "disabled" : ""}>+ LOTE</button>
+        </div>
+        ${!fromId ? '<div style="font-size:12px;color:#444;padding:8px 0">Escolhe primeiro a carteira de origem.</div>' : ""}
+        ${fromId && transferLots.length === 0 ? '<div style="font-size:12px;color:#444;padding:8px 0">Clica em "+ LOTE" para escolher o stock a transferir.</div>' : ""}
+        <div id="transfer-lots-wrap">${buildTransferLotsHtml(availLots)}</div>
+      </div>
+      <button class="btn-primary" style="width:100%;margin-top:14px" onclick="submitTransfer()">REGISTAR TRANSFERÊNCIA</button>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="sec-title" style="margin:0">Histórico de Transferências</div>
+        <button class="btn-danger" onclick="resetCollection('transfers','Transferências')" style="font-size:10px">🗑</button>
+      </div>
+      ${history.length === 0 ? '<div class="empty">SEM TRANSFERÊNCIAS</div>' : `
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Data</th><th>De</th><th>Para</th><th>Qtd Enviada</th><th>Taxa</th><th>Recebido</th></tr></thead>
+        <tbody>${history.map(t => {
         const wf = db.wallets.find(w => String(w.id) === String(t.fromId));
         const wt = db.wallets.find(w => String(w.id) === String(t.toId));
         return `<tr>
-                <td>${fDate(t.date)}</td>
-                <td style="color:#777">${wf?.name || "—"}</td>
-                <td style="color:#777">${wt?.name || "—"}</td>
-                <td style="color:#7eb8f7">${fAsset(t.amount, t.asset)}</td>
-                <td style="color:#ff7850">${fAsset(t.fee, t.asset)}</td>
-              </tr>`;
+            <td>${fDate(t.date)}</td>
+            <td style="color:#777">${wf?.name || "—"}</td>
+            <td style="color:#777">${wt?.name || "—"}</td>
+            <td style="color:#7eb8f7">${fAsset(t.amount, t.asset)}</td>
+            <td style="color:#ff7850">${fAsset(t.fee, t.asset)}</td>
+            <td style="color:#50c878">${fAsset(t.received, t.asset)}</td>
+          </tr>`;
       }).join("")}</tbody>
-          </table></div>`}
-        </div>
-      </div>`;
+      </table></div>`}
+    </div>
+  </div>`;
     }
+
+    function buildTransferLotsHtml(availLots) {
+      const fee = parseFloat(document.getElementById("tr-fee")?.value) || 0;
+      const totalQty = transferLots.reduce((s, e) => s + Number(e.qty || 0), 0);
+      return transferLots.map(entry => {
+        const lot = availLots.find(l => String(l.id) === String(entry.lotId));
+        return `<div class="lot-entry" id="tle-${entry.uid}">
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
+        <div><label>Lote</label>
+          <select onchange="updateTransferLot('${entry.uid}','lotId',this.value)">
+            <option value="">— Seleccionar —</option>
+            ${availLots.map(l => `<option value="${l.id}" ${String(l.id) === String(entry.lotId) ? "selected" : ""}>${l.supplierName} · ${Number(l.rateKz).toLocaleString()} Kz · ${fAsset(l.remaining, l.asset || "USDT")} disp.</option>`).join("")}
+          </select>
+        </div>
+        <div><label>Qtd${lot ? ` (max ${Number(lot.remaining).toFixed(4)})` : ""}</label>
+          <input type="number" min="0" step="0.0001" value="${entry.qty || ""}" placeholder="ex: 100" oninput="updateTransferLot('${entry.uid}','qty',this.value)"/>
+        </div>
+        <button class="btn-danger" onclick="removeTransferLot('${entry.uid}')">✕</button>
+      </div>
+      ${lot && entry.qty ? `<div style="margin-top:6px;font-size:11px;color:#666">Comprado a <span style="color:#c9a84c">${Number(lot.rateKz).toLocaleString()} Kz</span> — este câmbio viaja com o lote para a nova carteira.</div>` : ""}
+    </div>`;
+      }).join("") + (totalQty > 0 ? `<div style="font-size:11px;color:#555;margin-top:8px">Total selecionado: <span style="color:#7eb8f7;font-weight:700">${totalQty.toFixed(4)}</span> · Taxa: <span style="color:#ff7850">${fee}</span> · A carteira de destino recebe: <span style="color:#50c878;font-weight:700">${(totalQty - fee).toFixed(4)}</span></div>` : "");
+    }
+
+    window.onTransferFromChange = function () { transferLots = []; render(); };
+    window.addTransferLot = function () { transferLots.push({ uid: uid(), lotId: "", qty: "" }); render(); };
+    window.removeTransferLot = function (u) { transferLots = transferLots.filter(e => String(e.uid) !== String(u)); renderTransfersLots(); };
+    window.updateTransferLot = function (u, k, v) { transferLots = transferLots.map(e => String(e.uid) === String(u) ? { ...e, [k]: v } : e); renderTransfersLots(); };
+    window.renderTransfersLots = function () {
+      const fromId = document.getElementById("tr-from")?.value;
+      const availLots = fromId ? walletStock(fromId) : [];
+      const wrap = document.getElementById("transfer-lots-wrap");
+      if (wrap) wrap.innerHTML = buildTransferLotsHtml(availLots);
+    };
+
+    window.submitTransfer = async function () {
+      const date = document.getElementById("tr-date")?.value;
+      const fromId = document.getElementById("tr-from")?.value;
+      const toId = document.getElementById("tr-to")?.value;
+      const fee = parseFloat(document.getElementById("tr-fee")?.value) || 0;
+      const notes = document.getElementById("tr-notes")?.value || "";
+
+      if (!fromId || !toId) return alert("Escolhe a carteira de origem e destino.");
+      if (fromId === toId) return alert("A carteira de origem e destino não podem ser iguais.");
+      if (!transferLots.length || transferLots.some(e => !e.lotId || !e.qty)) return alert("Adiciona pelo menos um lote com quantidade.");
+
+      const fromWallet = db.wallets.find(w => String(w.id) === String(fromId));
+      const toWallet = db.wallets.find(w => String(w.id) === String(toId));
+      if (!fromWallet || !toWallet) return alert("Carteira inválida.");
+      if ((fromWallet.asset || "USDT") !== (toWallet.asset || "USDT")) return alert("As carteiras devem ter o mesmo ativo.");
+
+      for (const entry of transferLots) {
+        const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
+        if (!lot || Number(entry.qty) > Number(lot.remaining)) return alert(`Quantidade superior ao stock do lote de ${lot?.supplierName || "?"}.`);
+      }
+
+      const totalQty = transferLots.reduce((s, e) => s + Number(e.qty), 0);
+      const received = totalQty - fee;
+      if (received <= 0) return alert("A taxa não pode ser maior ou igual à quantidade transferida.");
+      const asset = fromWallet.asset || "USDT";
+      const feeRatio = received / totalQty; // proporção que efetivamente chega ao destino
+
+      const updates = [];
+      for (const entry of transferLots) {
+        const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
+        const qty = Number(entry.qty);
+        const newRemaining = Math.max(0, Number(lot.remaining) - qty);
+        updates.push({ col: "lots", item: { ...lot, remaining: newRemaining } });
+        // novo lote na carteira de destino, com o mesmo câmbio de compra, ajustado pela taxa proporcional
+        updates.push({
+          col: "lots", item: {
+            id: uid() + Math.floor(Math.random() * 1000), date, supplierName: lot.supplierName + " (transferido)",
+            usdt: qty * feeRatio, rateKz: lot.rateKz, totalKz: qty * feeRatio * lot.rateKz,
+            walletId: String(toId), remaining: qty * feeRatio, asset,
+            notes: `Transferido de ${fromWallet.name}`, createdAt: new Date().toISOString(),
+          }
+        });
+      }
+
+      const transfer = { id: uid(), date, fromId: String(fromId), toId: String(toId), amount: totalQty, fee, received, asset, notes, createdAt: new Date().toISOString() };
+      updates.push({ col: "transfers", item: transfer });
+
+      await bulkSave(updates);
+      transferLots = [];
+      alert("✅ Transferência registada! O stock foi movido para a carteira de destino.");
+      render();
+    };
 
     window.renderTransfersForm = function () { render(); };
 
@@ -1156,16 +1256,25 @@
       if (!top) return null;
       return { ...db.clients.find(c => String(c.id) === String(top[0])), volume: top[1] };
     }
+
+    function walletStock(walletId) {
+      return db.lots.filter(l => String(l.walletId) === String(walletId) && Number(l.remaining || 0) > 0);
+    }
+    function walletBalance(walletId) {
+      return walletStock(walletId).reduce((s, l) => s + Number(l.remaining || 0), 0);
+    }
+
     function statCard(label, value, color, icon) {
-      return `<div class="stat-card">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start">
-      <div>
-        <div style="font-size:10px;color:#555;letter-spacing:2px;margin-bottom:8px;text-transform:uppercase">${label}</div>
-        <div style="font-size:16px;font-weight:700;color:${color};font-family:'Syne',sans-serif">${value}</div>
-      </div>
-      <div style="color:${color};font-size:18px;opacity:.3">${icon}</div>
-    </div>
-  </div>`;
+      return `
+      <div class="stat-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <div style="font-size:10px;color:#555;letter-spacing:2px;margin-bottom:8px;text-transform:uppercase">${label}</div>
+            <div style="font-size:16px;font-weight:700;color:${color};font-family:'Syne',sans-serif">${value}</div>
+          </div>
+          <div style="color:${color};font-size:18px;opacity:.3">${icon}</div>
+        </div>
+      </div>`;
     }
     function attachEvents() { setStatus(isConfigured() ? "connecting" : "offline-local"); }
 

@@ -103,6 +103,7 @@
 
     let page = "resumo";
     let modal = null;
+    let modalState=null;
     let resumoPeriod = "month";
     window.setResumoPeriod = function (p) { resumoPeriod = p; render(); };
 
@@ -115,36 +116,36 @@
 
     function layout() {
       return `
-  <aside class="sidebar" id="sidebar">
-    <div class="brand">
-      <span class="bname">IVANDRO</span>
-      <span class="bsub">HUB FINANCEIRO</span>
-    </div>
-    <nav>${PAGES.map(p => `
-      <button class="nav${page === p.id ? " act" : ""}" onclick="go('${p.id}')">
-        <span style="font-size:14px;width:20px">${p.icon}</span><span>${p.label}</span>
-      </button>`).join("")}
-    </nav>
-    <div class="sidebar-foot">
-      <div style="font-size:10px;color:#555;letter-spacing:2px;margin-bottom:6px">META 2026</div>
-      ${goalBar()}
-      <div id="hub-status" style="margin-top:8px"></div>
-    </div>
-  </aside>
-  <div class="veil" id="veil" onclick="closeMenu()"></div>
-  <div class="main">
-    <header class="hdr">
-      <button class="ham" onclick="toggleMenu()">☰</button>
-      <div>
-        <div class="ptitle">${PAGES.find(p => p.id === page)?.label}</div>
-        <div class="pdate">${new Date().toLocaleDateString("pt-AO", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
-      </div>
-      <a href="${kambioLink()}" style="margin-left:auto;font-size:10px;color:#c9a84c;text-decoration:none;letter-spacing:1px;border:1px solid #c9a84c33;padding:6px 12px;border-radius:2px">↗ KÂMBIO</a>
-    </header>
-    <div class="body">
-      ${buildPage()}
-    </div>
-  </div>`;
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <span class="bname">IVANDRO</span>
+          <span class="bsub">HUB FINANCEIRO</span>
+        </div>
+        <nav>${PAGES.map(p => `
+          <button class="nav${page === p.id ? " act" : ""}" onclick="go('${p.id}')">
+            <span style="font-size:14px;width:20px">${p.icon}</span><span>${p.label}</span>
+          </button>`).join("")}
+        </nav>
+        <div class="sidebar-foot">
+          <div style="font-size:10px;color:#555;letter-spacing:2px;margin-bottom:6px">META 2026</div>
+          ${goalBar()}
+          <div id="hub-status" style="margin-top:8px"></div>
+        </div>
+      </aside>
+      <div class="veil" id="veil" onclick="closeMenu()"></div>
+      <div class="main">
+        <header class="hdr">
+          <button class="ham" onclick="toggleMenu()">☰</button>
+          <div>
+            <div class="ptitle">${PAGES.find(p => p.id === page)?.label}</div>
+            <div class="pdate">${new Date().toLocaleDateString("pt-AO", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
+          </div>
+          <a href="${kambioLink()}" style="margin-left:auto;font-size:10px;color:#c9a84c;text-decoration:none;letter-spacing:1px;border:1px solid #c9a84c33;padding:6px 12px;border-radius:2px">↗ KÂMBIO</a>
+        </header>
+        <div class="body">
+          ${buildPage()}
+        </div>
+      </div>`;
     }
 
     function go(p) { page = p; closeMenu(); render(); }
@@ -158,11 +159,11 @@
       const total = patrimonio();
       const pct = Math.min(100, (total / meta) * 100).toFixed(1);
       return `
-  <div style="font-size:11px;color:#c9a84c;font-weight:700;margin-bottom:4px">${fKz(total)} / ${fKz(meta)}</div>
-  <div style="background:#1a1a2e;border-radius:2px;height:6px;overflow:hidden">
-    <div style="background:linear-gradient(90deg,#c9a84c,#50c878);width:${pct}%;height:100%;transition:width .5s"></div>
-  </div>
-  <div style="font-size:10px;color:#555;margin-top:3px">${pct}% da meta</div>`;
+      <div style="font-size:11px;color:#c9a84c;font-weight:700;margin-bottom:4px">${fKz(total)} / ${fKz(meta)}</div>
+      <div style="background:#1a1a2e;border-radius:2px;height:6px;overflow:hidden">
+        <div style="background:linear-gradient(90deg,#c9a84c,#50c878);width:${pct}%;height:100%;transition:width .5s"></div>
+      </div>
+      <div style="font-size:10px;color:#555;margin-top:3px">${pct}% da meta</div>`;
     }
 
     function avgBuyRate(asset) {
@@ -283,86 +284,146 @@
 
     // ── FINANÇAS PESSOAIS ──────────────────────────────────────────────
     function pagePessoal() {
+      const period = window._pessoalPeriod || "month";
+      const RP = [{ id: "today", label: "HOJE" }, { id: "week", label: "SEMANA" }, { id: "month", label: "MÊS" }, { id: "year", label: "ANO" }, { id: "all", label: "TUDO" }];
+      const incomeP = db.hub_income.filter(x => inPeriod(x.date, period));
+      const expenseP = db.hub_expenses.filter(x => inPeriod(x.date, period));
+
       const income = db.hub_income.reduce((s, x) => s + Number(x.amount || 0), 0);
       const expenses = db.hub_expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
       const balance = income - expenses;
 
+      const cashIncome = db.hub_income.filter(x => x.method === "Dinheiro em Mãos").reduce((s, x) => s + Number(x.amount || 0), 0);
+      const cashExpense = db.hub_expenses.filter(x => x.method === "Dinheiro em Mãos").reduce((s, x) => s + Number(x.amount || 0), 0);
+      const cashBalance = cashIncome - cashExpense;
+      const bankBalance = balance - cashBalance;
+
+      // Salário vs retirado, baseado no lucro da Kâmbio no período
+      const kambioProfitP = db.sales.filter(s => inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const salarioAlocado = kambioProfitP * 0.3;
+      const retiradoP = expenseP.reduce((s, x) => s + Number(x.amount || 0), 0);
+      const excedente = retiradoP - salarioAlocado;
+
+      // Resumo por categoria (gastos do período)
+      const catTotals = {};
+      expenseP.forEach(x => { catTotals[x.category] = (catTotals[x.category] || 0) + Number(x.amount || 0); });
+      const catSorted = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
+      const maxCat = catSorted[0]?.[1] || 1;
+
       const INCOME_CATS = ["Salário", "Serviços Extras", "Importação", "Táxi", "Outro"];
-      const EXPENSE_CATS = ["Alimentação", "Transporte", "Telecomunicações", "Lazer", "Vestuário", "Cota Juventude", "Outro"];
+      const EXPENSE_CATS = ["Alimentação", "Transporte", "Telecomunicações", "Lazer", "Vestuário", "Cota Juventude", "Investimento", "Outro"];
+      const METHODS = ["Conta Bancária", "Dinheiro em Mãos"];
+      const finPeriod2 = window._pessoalPeriod || "month";
 
       return `
-  <div class="grid4" style="margin-bottom:20px">
-    ${sc("Total Entradas", fKz(income), "#50c878", "▲")}
-    ${sc("Total Saídas", fKz(expenses), "#ff7850", "▼")}
-    ${sc("Saldo Pessoal", fKz(balance), balance >= 0 ? "#c9a84c" : "#ff5050", "◆")}
-    ${sc("Movimentos", db.hub_income.length + db.hub_expenses.length, "#7eb8f7", "◈")}
-  </div>
-
-  <div class="grid2">
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <div class="sec-title" style="margin:0">Entradas</div>
-        <button class="btn-p" onclick="openModal('income')">+ ENTRADA</button>
+      <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+        ${RP.map(p => `<button class="${period === p.id ? "btn-p" : "btn-ghost"}" style="font-size:11px;padding:6px 14px" onclick="setPessoalPeriod('${p.id}')">${p.label}</button>`).join("")}
       </div>
-      ${db.hub_income.length === 0 ? empty() : `
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
-        <tbody>${[...db.hub_income].sort((a, b) => new Date(b.date) - new Date(a.date)).map(x => `
-          <tr>
-            <td>${fDate(x.date)}</td>
-            <td><span class="cat-badge green">${x.category}</span></td>
-            <td style="color:#aaa">${x.description || "—"}</td>
-            <td style="color:#50c878;font-weight:700">${fKz(x.amount)}</td>
-            <td><button class="btn-d" onclick="del('hub_income','${x.id}')">✕</button></td>
-          </tr>`).join("")}
-        </tbody>
-      </table></div>`}
-    </div>
 
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <div class="sec-title" style="margin:0">Saídas</div>
-        <button class="btn-p" onclick="openModal('expense')">+ SAÍDA</button>
+      <div class="grid4" style="margin-bottom:20px">
+        ${sc("Total Entradas", fKz(income), "#50c878", "▲")}
+        ${sc("Total Saídas", fKz(expenses), "#ff7850", "▼")}
+        ${sc("Em Contas Bancárias", fKz(bankBalance), "#7eb8f7", "🏦")}
+        ${sc("Dinheiro em Mãos", fKz(cashBalance), "#c9a84c", "💵")}
       </div>
-      ${db.hub_expenses.length === 0 ? empty() : `
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
-        <tbody>${[...db.hub_expenses].sort((a, b) => new Date(b.date) - new Date(a.date)).map(x => `
-          <tr>
-            <td>${fDate(x.date)}</td>
-            <td><span class="cat-badge red">${x.category}</span></td>
-            <td style="color:#aaa">${x.description || "—"}</td>
-            <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
-            <td><button class="btn-d" onclick="del('hub_expenses','${x.id}')">✕</button></td>
-          </tr>`).join("")}
-        </tbody>
-      </table></div>`}
-    </div>
-  </div>
 
-  ${modal === "income" ? modalForm("NOVA ENTRADA", "income", [
+      <div class="card" style="margin-bottom:20px;border-color:${excedente > 0 ? "#ff585033" : "#50c87833"}">
+        <div class="sec-title">💡 Salário vs. Retirada (${RP.find(p => p.id === period)?.label})</div>
+        <div class="grid2">
+          <div>
+            <div class="row"><span>Lucro Kâmbio no período</span><span style="color:#c9a84c">${fKz(kambioProfitP)}</span></div>
+            <div class="row"><span>Salário alocado (30%)</span><span style="color:#50c878;font-weight:700">${fKz(salarioAlocado)}</span></div>
+            <div class="row"><span>Total retirado (saídas)</span><span style="color:#ff7850;font-weight:700">${fKz(retiradoP)}</span></div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:center">
+            ${excedente > 0 ? `
+            <div style="text-align:center">
+              <div style="font-size:10px;color:#ff5050;letter-spacing:2px">⚠ ACIMA DO SALÁRIO</div>
+              <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#ff5050">${fKz(excedente)}</div>
+              <div style="font-size:10px;color:#666;margin-top:4px">retiraste a mais do que o alocado</div>
+            </div>`: `
+            <div style="text-align:center">
+              <div style="font-size:10px;color:#50c878;letter-spacing:2px">✓ DENTRO DO ORÇAMENTO</div>
+              <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#50c878">${fKz(Math.abs(excedente))}</div>
+              <div style="font-size:10px;color:#666;margin-top:4px">ainda disponível para retirar</div>
+            </div>`}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div class="sec-title">Onde Foi o Dinheiro (${RP.find(p => p.id === period)?.label})</div>
+        ${catSorted.length === 0 ? empty("Sem saídas neste período") : catSorted.map(([cat, val]) => `
+          <div style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+              <span style="color:#ccc">${cat}</span><span style="color:#ff7850;font-weight:700">${fKz(val)}</span>
+            </div>
+            <div style="background:#1a1a2e;border-radius:2px;height:6px;overflow:hidden">
+              <div style="background:linear-gradient(90deg,#ff7850,#c9a84c);width:${(val / maxCat * 100).toFixed(0)}%;height:100%"></div>
+            </div>
+          </div>`).join("")}
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div class="sec-title" style="margin:0">Entradas</div>
+            <button class="btn-p" onclick="openModal('income')">+ ENTRADA</button>
+          </div>
+          ${db.hub_income.length === 0 ? empty() : `
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Data</th><th>Categoria</th><th>Método</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
+            <tbody>${[...db.hub_income].sort((a, b) => new Date(b.date) - new Date(a.date)).map(x => `
+              <tr>
+                <td>${fDate(x.date)}</td>
+                <td><span class="cat-badge green">${x.category}</span></td>
+                <td style="color:#777;font-size:11px">${x.method || "—"}</td>
+                <td style="color:#aaa">${x.description || "—"}</td>
+                <td style="color:#50c878;font-weight:700">${fKz(x.amount)}</td>
+                <td><button class="btn-d" onclick="del('hub_income','${x.id}')">✕</button></td>
+              </tr>`).join("")}
+            </tbody>
+          </table></div>`}
+        </div>
+
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div class="sec-title" style="margin:0">Saídas</div>
+            <button class="btn-p" onclick="openModal('expense')">+ SAÍDA</button>
+          </div>
+          ${db.hub_expenses.length === 0 ? empty() : `
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Data</th><th>Categoria</th><th>Método</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
+            <tbody>${[...db.hub_expenses].sort((a, b) => new Date(b.date) - new Date(a.date)).map(x => `
+              <tr>
+                <td>${fDate(x.date)}</td>
+                <td><span class="cat-badge red">${x.category}</span></td>
+                <td style="color:#777;font-size:11px">${x.method || "—"}</td>
+                <td style="color:#aaa">${x.description || "—"}</td>
+                <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
+                <td><button class="btn-d" onclick="del('hub_expenses','${x.id}')">✕</button></td>
+              </tr>`).join("")}
+            </tbody>
+          </table></div>`}
+        </div>
+      </div>
+
+      ${modal === "income" ? modalForm("NOVA ENTRADA", "income", [
         { id: "date", label: "Data", type: "date", val: today() },
         { id: "category", label: "Categoria", type: "select", opts: INCOME_CATS },
+        { id: "method", label: "Onde Entrou", type: "select", opts: METHODS },
         { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 150000" },
         { id: "description", label: "Descrição", type: "text", placeholder: "ex: Salário Junho" },
-      ], async () => {
-        const d = gv("date"), c = gv("category"), a = parseFloat(gv("amount") || 0), desc = gv("description");
-        if (!a || !c) return alert("Preenche categoria e valor.");
-        await saveDoc("hub_income", { id: uid(), date: d, category: c, amount: a, description: desc });
-        modal = null; render();
-      }) : ""}
-  ${modal === "expense" ? modalForm("NOVA SAÍDA", "expense", [
+      ]) : ""}
+        ${modal === "expense" ? modalForm("NOVA SAÍDA", "expense", [
         { id: "date", label: "Data", type: "date", val: today() },
         { id: "category", label: "Categoria", type: "select", opts: EXPENSE_CATS },
+        { id: "method", label: "Método de Pagamento", type: "select", opts: METHODS },
         { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 5000" },
         { id: "description", label: "Descrição", type: "text", placeholder: "ex: Supermercado Shoprite" },
-      ], async () => {
-        const d = gv("date"), c = gv("category"), a = parseFloat(gv("amount") || 0), desc = gv("description");
-        if (!a || !c) return alert("Preenche categoria e valor.");
-        await saveDoc("hub_expenses", { id: uid(), date: d, category: c, amount: a, description: desc });
-        modal = null; render();
-      }) : ""}`;
+      ]) : ""}`;
     }
+    window.setPessoalPeriod = function (p) { window._pessoalPeriod = p; render(); };
 
     // ── TÁXI ───────────────────────────────────────────────────────────
     function pageTaxi() {
@@ -377,66 +438,66 @@
       const COST_CATS = ["Compra do Carro", "Peça/Reparação", "Combustível", "Manutenção Preventiva", "Caixa de Segurança", "Seguro", "Outro"];
 
       return `
-  <div class="grid4" style="margin-bottom:20px">
-    ${sc("Receita Total", fKz(totalIn), "#50c878", "▲")}
-    ${sc("Custos Totais", fKz(totalCost), "#ff7850", "▼")}
-    ${sc("Líquido", fKz(liquid), liquid >= 0 ? "#c9a84c" : "#ff5050", "◆")}
-    ${sc("Recuperado", pctBreak + "%", "#7eb8f7", "◈")}
-  </div>
+          <div class="grid4" style="margin-bottom:20px">
+            ${sc("Receita Total", fKz(totalIn), "#50c878", "▲")}
+            ${sc("Custos Totais", fKz(totalCost), "#ff7850", "▼")}
+            ${sc("Líquido", fKz(liquid), liquid >= 0 ? "#c9a84c" : "#ff5050", "◆")}
+            ${sc("Recuperado", pctBreak + "%", "#7eb8f7", "◈")}
+          </div>
 
-  <!-- Breakeven visual -->
-  <div class="card" style="margin-bottom:20px">
-    <div class="sec-title">Breakeven — Recuperação do Investimento</div>
-    <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:8px">
-      <span>Investido: <span style="color:#ff7850">${fKz(totalCost)}</span></span>
-      <span>Recuperado: <span style="color:#50c878">${fKz(totalIn)}</span></span>
-      <span style="color:${liquid >= 0 ? "#50c878" : "#ff7850"}">${liquid >= 0 ? "✅ BREAKEVEN ATINGIDO" : "Faltam " + fKz(Math.abs(liquid))}</span>
-    </div>
-    <div style="background:#1a1a2e;border-radius:4px;height:10px;overflow:hidden">
-      <div style="background:linear-gradient(90deg,#ff7850,#c9a84c,#50c878);width:${pctBreak}%;height:100%;transition:width 1s;border-radius:4px"></div>
-    </div>
-    <div style="font-size:10px;color:#555;margin-top:4px">${pctBreak}% do investimento recuperado</div>
-  </div>
+          <!-- Breakeven visual -->
+          <div class="card" style="margin-bottom:20px">
+            <div class="sec-title">Breakeven — Recuperação do Investimento</div>
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:8px">
+              <span>Investido: <span style="color:#ff7850">${fKz(totalCost)}</span></span>
+              <span>Recuperado: <span style="color:#50c878">${fKz(totalIn)}</span></span>
+              <span style="color:${liquid >= 0 ? "#50c878" : "#ff7850"}">${liquid >= 0 ? "✅ BREAKEVEN ATINGIDO" : "Faltam " + fKz(Math.abs(liquid))}</span>
+            </div>
+            <div style="background:#1a1a2e;border-radius:4px;height:10px;overflow:hidden">
+              <div style="background:linear-gradient(90deg,#ff7850,#c9a84c,#50c878);width:${pctBreak}%;height:100%;transition:width 1s;border-radius:4px"></div>
+            </div>
+            <div style="font-size:10px;color:#555;margin-top:4px">${pctBreak}% do investimento recuperado</div>
+          </div>
 
-  <div class="grid2">
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <div class="sec-title" style="margin:0">Receitas Diárias</div>
-        <button class="btn-p" onclick="openModal('taxi-in')">+ RECEITA</button>
-      </div>
-      ${entries.length === 0 ? empty("Sem receitas registadas") : `
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>Data</th><th>Tipo</th><th>Valor</th><th>Notas</th><th></th></tr></thead>
-        <tbody>${entries.map(x => `<tr>
-          <td>${fDate(x.date)}</td>
-          <td><span class="cat-badge green">${x.type || "Diária"}</span></td>
-          <td style="color:#50c878;font-weight:700">${fKz(x.amount)}</td>
-          <td style="color:#555">${x.notes || "—"}</td>
-          <td><button class="btn-d" onclick="del('hub_taxi','${x.id}')">✕</button></td>
-        </tr>`).join("")}</tbody>
-      </table></div>`}
-    </div>
+          <div class="grid2">
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+                <div class="sec-title" style="margin:0">Receitas Diárias</div>
+                <button class="btn-p" onclick="openModal('taxi-in')">+ RECEITA</button>
+              </div>
+              ${entries.length === 0 ? empty("Sem receitas registadas") : `
+              <div style="overflow-x:auto"><table class="tbl">
+                <thead><tr><th>Data</th><th>Tipo</th><th>Valor</th><th>Notas</th><th></th></tr></thead>
+                <tbody>${entries.map(x => `<tr>
+                  <td>${fDate(x.date)}</td>
+                  <td><span class="cat-badge green">${x.type || "Diária"}</span></td>
+                  <td style="color:#50c878;font-weight:700">${fKz(x.amount)}</td>
+                  <td style="color:#555">${x.notes || "—"}</td>
+                  <td><button class="btn-d" onclick="del('hub_taxi','${x.id}')">✕</button></td>
+                </tr>`).join("")}</tbody>
+              </table></div>`}
+            </div>
 
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <div class="sec-title" style="margin:0">Custos & Investimentos</div>
-        <button class="btn-p" onclick="openModal('taxi-cost')">+ CUSTO</button>
-      </div>
-      ${costs.length === 0 ? empty("Sem custos registados") : `
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>Data</th><th>Categoria</th><th>Valor</th><th>Descrição</th><th></th></tr></thead>
-        <tbody>${costs.map(x => `<tr>
-          <td>${fDate(x.date)}</td>
-          <td><span class="cat-badge red">${x.category}</span></td>
-          <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
-          <td style="color:#555">${x.description || "—"}</td>
-          <td><button class="btn-d" onclick="del('hub_taxi_costs','${x.id}')">✕</button></td>
-        </tr>`).join("")}</tbody>
-      </table></div>`}
-    </div>
-  </div>
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+                <div class="sec-title" style="margin:0">Custos & Investimentos</div>
+                <button class="btn-p" onclick="openModal('taxi-cost')">+ CUSTO</button>
+              </div>
+              ${costs.length === 0 ? empty("Sem custos registados") : `
+              <div style="overflow-x:auto"><table class="tbl">
+                <thead><tr><th>Data</th><th>Categoria</th><th>Valor</th><th>Descrição</th><th></th></tr></thead>
+                <tbody>${costs.map(x => `<tr>
+                  <td>${fDate(x.date)}</td>
+                  <td><span class="cat-badge red">${x.category}</span></td>
+                  <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
+                  <td style="color:#555">${x.description || "—"}</td>
+                  <td><button class="btn-d" onclick="del('hub_taxi_costs','${x.id}')">✕</button></td>
+                </tr>`).join("")}</tbody>
+              </table></div>`}
+            </div>
+          </div>
 
-  ${modal === "taxi-in" ? modalForm("RECEITA DO TÁXI", "taxi-in", [
+      ${modal === "taxi-in" ? modalForm("RECEITA DO TÁXI", "taxi-in", [
         { id: "date", label: "Data", type: "date", val: today() },
         { id: "type", label: "Tipo", type: "select", opts: ["Diária (15.000 Kz)", "Manutenção (reserva)", "Caixa Segurança", "Pagamento Motorista", "Outro"] },
         { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 15000" },
@@ -447,7 +508,7 @@
         await saveDoc("hub_taxi", { id: uid(), date: d, type: t, amount: a, notes: n });
         modal = null; render();
       }) : ""}
-  ${modal === "taxi-cost" ? modalForm("CUSTO DO TÁXI", "taxi-cost", [
+      ${modal === "taxi-cost" ? modalForm("CUSTO DO TÁXI", "taxi-cost", [
         { id: "date", label: "Data", type: "date", val: today() },
         { id: "category", label: "Categoria", type: "select", opts: COST_CATS },
         { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 50000" },
@@ -472,36 +533,36 @@
       const STATUS_LABELS = { pedido: "Pedido", em_transito: "Em Trânsito", na_redirecionadora: "Na Redirecionadora", em_angola: "Em Angola", vendido: "Vendido" };
 
       return `
-  <div class="grid4" style="margin-bottom:20px">
-    ${sc("Total Investido", fKz(totalInvested), "#ff7850", "▼")}
-    ${sc("Total Receita", fKz(totalRevenue), "#50c878", "▲")}
-    ${sc("Lucro Total", fKz(totalProfit), totalProfit >= 0 ? "#c9a84c" : "#ff5050", "◆")}
-    ${sc("Em Curso", pending, "#7eb8f7", "◈")}
-  </div>
+      <div class="grid4" style="margin-bottom:20px">
+        ${sc("Total Investido", fKz(totalInvested), "#ff7850", "▼")}
+        ${sc("Total Receita", fKz(totalRevenue), "#50c878", "▲")}
+        ${sc("Lucro Total", fKz(totalProfit), totalProfit >= 0 ? "#c9a84c" : "#ff5050", "◆")}
+        ${sc("Em Curso", pending, "#7eb8f7", "◈")}
+      </div>
 
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <div class="sec-title" style="margin:0">Encomendas</div>
-      <button class="btn-p" onclick="openModal('import')">+ NOVA ENCOMENDA</button>
-    </div>
-    ${imports.length === 0 ? empty("Sem encomendas. Regista a tua primeira importação.") : `
-    <div style="overflow-x:auto"><table class="tbl">
-      <thead><tr><th>Data</th><th>Produto</th><th>Cartão</th><th>Custo Total</th><th>Venda</th><th>Lucro</th><th>Estado</th><th></th></tr></thead>
-      <tbody>${imports.map(i => `<tr>
-        <td>${fDate(i.orderDate)}</td>
-        <td style="font-weight:700;color:#e8e4d9">${i.product}</td>
-        <td style="color:#7eb8f7">${i.card || "—"}</td>
-        <td style="color:#ff7850">${fKz(i.totalCostKz)}</td>
-        <td style="color:#50c878">${i.saleKz ? fKz(i.saleKz) : "—"}</td>
-        <td style="color:${Number(i.profitKz || 0) >= 0 ? "#c9a84c" : "#ff5050"};font-weight:700">${i.profitKz ? fKz(i.profitKz) : "—"}</td>
-        <td><span style="font-size:10px;padding:3px 8px;border-radius:2px;background:${STATUS_COLORS[i.status] || "#555"}22;color:${STATUS_COLORS[i.status] || "#555"}">${STATUS_LABELS[i.status] || i.status}</span></td>
-        <td><button class="btn-d" onclick="del('hub_imports','${i.id}')">✕</button></td>
-      </tr>`).join("")}
-      </tbody>
-    </table></div>`}
-  </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="sec-title" style="margin:0">Encomendas</div>
+          <button class="btn-p" onclick="openModal('import')">+ NOVA ENCOMENDA</button>
+        </div>
+        ${imports.length === 0 ? empty("Sem encomendas. Regista a tua primeira importação.") : `
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Data</th><th>Produto</th><th>Cartão</th><th>Custo Total</th><th>Venda</th><th>Lucro</th><th>Estado</th><th></th></tr></thead>
+          <tbody>${imports.map(i => `<tr>
+            <td>${fDate(i.orderDate)}</td>
+            <td style="font-weight:700;color:#e8e4d9">${i.product}</td>
+            <td style="color:#7eb8f7">${i.card || "—"}</td>
+            <td style="color:#ff7850">${fKz(i.totalCostKz)}</td>
+            <td style="color:#50c878">${i.saleKz ? fKz(i.saleKz) : "—"}</td>
+            <td style="color:${Number(i.profitKz || 0) >= 0 ? "#c9a84c" : "#ff5050"};font-weight:700">${i.profitKz ? fKz(i.profitKz) : "—"}</td>
+            <td><span style="font-size:10px;padding:3px 8px;border-radius:2px;background:${STATUS_COLORS[i.status] || "#555"}22;color:${STATUS_COLORS[i.status] || "#555"}">${STATUS_LABELS[i.status] || i.status}</span></td>
+            <td><button class="btn-d" onclick="del('hub_imports','${i.id}')">✕</button></td>
+          </tr>`).join("")}
+          </tbody>
+        </table></div>`}
+      </div>
 
-  ${modal === "import" ? importModal() : ""}`;
+      ${modal === "import" ? importModal() : ""}`;
     }
 
     function importModal() {
@@ -527,64 +588,64 @@
       };
 
       return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()" style="max-width:540px">
-    <div class="modal-title">NOVA ENCOMENDA — IMPORTAÇÃO</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-      <div class="field full"><label>Produto</label><input id="m-product" placeholder="ex: iPhone 14 Pro 256GB Space Black"/></div>
-      <div class="field"><label>Data do Pedido</label><input type="date" id="m-orderDate" value="${today()}"/></div>
-      <div class="field"><label>Estado</label>
-        <select id="m-status">
-          <option value="pedido">Pedido</option>
-          <option value="em_transito">Em Trânsito</option>
-          <option value="na_redirecionadora">Na Redirecionadora</option>
-          <option value="em_angola">Em Angola</option>
-          <option value="vendido">Vendido</option>
-        </select>
-      </div>
-
-      <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">CUSTOS</div>
-
-      <div class="field"><label>Preço no eBay (USD)</label><input type="number" id="m-price_usd" placeholder="ex: 280" oninput="calcImport()"/></div>
-      <div class="field"><label>Frete eBay → Redirecionadora (USD)</label><input type="number" id="m-freight_us" placeholder="0 se grátis" oninput="calcImport()"/></div>
-      <div class="field"><label>Frete Redirecionadora → Angola (USD)</label><input type="number" id="m-freight_ao" placeholder="ex: 17.41" oninput="calcImport()"/></div>
-      <div class="field"><label>Taxa AGT (16% do produto) — calculada</label><div class="computed" id="calc-agt">$0.00</div></div>
-      <div class="field"><label>Taxa USDT/USD (spread Bybit)</label><input type="number" id="m-rate_usdt_usd" placeholder="1.01454545" value="1.01454545" step="0.00001" oninput="calcImport()"/></div>
-      <div class="field"><label>Taxa USDT/Kz</label><input type="number" id="m-rate_kz" placeholder="1157" value="1157" oninput="calcImport()"/></div>
-      <div class="field"><label>Tráfego Pago (Kz)</label><input type="number" id="m-marketing" placeholder="ex: 5000" oninput="calcImport()"/></div>
-      <div class="field"><label>Sacolas / Embalagem (Kz)</label><input type="number" id="m-packaging" placeholder="ex: 2000" oninput="calcImport()"/></div>
-      <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">PAGAMENTO</div>
-
-      <div class="field"><label>Cartão Usado no Pagamento</label>
-        <input list="card-options" id="m-card" placeholder="ex: BFA Visa Gold"/>
-        <datalist id="card-options">
-          ${[...new Set(db.hub_imports.map(i => i.card).filter(Boolean))].map(c => `<option value="${c}"></option>`).join("")}
-        </datalist>
-      </div>
-      <div class="field"><label>Tipo de Cashback</label>
-        <select id="m-cashback_type" onchange="calcImport()">
-          <option value="percentage">Percentagem (%)</option>
-          <option value="fixed">Valor Fixo (Kz)</option>
-        </select>
-      </div>
-      <div class="field"><label>Valor do Cashback</label><input type="number" id="m-cashback_value" placeholder="ex: 2" step="0.01" oninput="calcImport()"/></div>
-      <div class="field"><label>Cashback Aplicado</label><div class="computed" id="calc-cashback" style="color:#50c878">0,00 Kz</div></div>
-
-      <div style="grid-column:1/-1;background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:12px">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
-          <div><span style="color:#555">Total USD (produto+frete+AGT):</span><br><span id="calc-total-usd" style="color:#7eb8f7;font-weight:700">$0.00</span></div>
-          <div><span style="color:#555">Custo Total em Kz (após cashback):</span><br><span id="calc-total-kz" style="color:#ff7850;font-weight:700">0,00 Kz</span></div>
+      <div class="modal-title">NOVA ENCOMENDA — IMPORTAÇÃO</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="field full"><label>Produto</label><input id="m-product" placeholder="ex: iPhone 14 Pro 256GB Space Black"/></div>
+        <div class="field"><label>Data do Pedido</label><input type="date" id="m-orderDate" value="${today()}"/></div>
+        <div class="field"><label>Estado</label>
+          <select id="m-status">
+            <option value="pedido">Pedido</option>
+            <option value="em_transito">Em Trânsito</option>
+            <option value="na_redirecionadora">Na Redirecionadora</option>
+            <option value="em_angola">Em Angola</option>
+            <option value="vendido">Vendido</option>
+          </select>
         </div>
-      </div>
 
-      <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">VENDA</div>
-      <div class="field"><label>Preço de Venda (Kz)</label><input type="number" id="m-sale_kz" placeholder="ex: 470000" oninput="calcImport()"/></div>
-      <div class="field"><label>Lucro Previsto</label><div class="computed" id="calc-profit" style="font-size:16px">0,00 Kz</div></div>
-      <div class="field full"><label>Notas</label><input id="m-notes" placeholder="Opcional..."/></div>
-    </div>
-    <div style="display:flex;gap:12px;margin-top:16px">
-      <button class="btn-p" style="flex:1" onclick="saveImport()">GUARDAR</button>
-      <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
-    </div>
-  </div></div>`;
+       <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">CUSTOS</div>
+
+        <div class="field"><label>Preço no eBay (USD)</label><input type="number" id="m-price_usd" placeholder="ex: 280" oninput="calcImport()"/></div>
+        <div class="field"><label>Frete eBay → Redirecionadora (USD)</label><input type="number" id="m-freight_us" placeholder="0 se grátis" oninput="calcImport()"/></div>
+        <div class="field"><label>Frete Redirecionadora → Angola (USD)</label><input type="number" id="m-freight_ao" placeholder="ex: 17.41" oninput="calcImport()"/></div>
+        <div class="field"><label>Taxa AGT (16% do produto) — calculada</label><div class="computed" id="calc-agt">$0.00</div></div>
+        <div class="field"><label>Taxa USDT/USD (spread Bybit)</label><input type="number" id="m-rate_usdt_usd" placeholder="1.01454545" value="1.01454545" step="0.00001" oninput="calcImport()"/></div>
+        <div class="field"><label>Taxa USDT/Kz</label><input type="number" id="m-rate_kz" placeholder="1157" value="1157" oninput="calcImport()"/></div>
+        <div class="field"><label>Tráfego Pago (Kz)</label><input type="number" id="m-marketing" placeholder="ex: 5000" oninput="calcImport()"/></div>
+        <div class="field"><label>Sacolas / Embalagem (Kz)</label><input type="number" id="m-packaging" placeholder="ex: 2000" oninput="calcImport()"/></div>
+        <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">PAGAMENTO</div>
+
+        <div class="field"><label>Cartão Usado no Pagamento</label>
+          <input list="card-options" id="m-card" placeholder="ex: BFA Visa Gold"/>
+          <datalist id="card-options">
+            ${[...new Set(db.hub_imports.map(i => i.card).filter(Boolean))].map(c => `<option value="${c}"></option>`).join("")}
+          </datalist>
+        </div>
+          <div class="field"><label>Tipo de Cashback</label>
+            <select id="m-cashback_type" onchange="calcImport()">
+              <option value="percentage">Percentagem (%)</option>
+              <option value="fixed">Valor Fixo (Kz)</option>
+            </select>
+          </div>
+          <div class="field"><label>Valor do Cashback</label><input type="number" id="m-cashback_value" placeholder="ex: 2" step="0.01" oninput="calcImport()"/></div>
+          <div class="field"><label>Cashback Aplicado</label><div class="computed" id="calc-cashback" style="color:#50c878">0,00 Kz</div></div>
+
+          <div style="grid-column:1/-1;background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:12px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+              <div><span style="color:#555">Total USD (produto+frete+AGT):</span><br><span id="calc-total-usd" style="color:#7eb8f7;font-weight:700">$0.00</span></div>
+              <div><span style="color:#555">Custo Total em Kz (após cashback):</span><br><span id="calc-total-kz" style="color:#ff7850;font-weight:700">0,00 Kz</span></div>
+            </div>
+          </div>
+
+          <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">VENDA</div>
+          <div class="field"><label>Preço de Venda (Kz)</label><input type="number" id="m-sale_kz" placeholder="ex: 470000" oninput="calcImport()"/></div>
+          <div class="field"><label>Lucro Previsto</label><div class="computed" id="calc-profit" style="font-size:16px">0,00 Kz</div></div>
+          <div class="field full"><label>Notas</label><input id="m-notes" placeholder="Opcional..."/></div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:16px">
+          <button class="btn-p" style="flex:1" onclick="saveImport()">GUARDAR</button>
+          <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+        </div>
+      </div></div>`;
     }
 
     window.calcImport = function () {
@@ -705,9 +766,11 @@
       }) : ""}`;
     }
 
+    function loanPaid(loan) { return (loan.payments || []).reduce((s, p) => s + Number(p.amount || 0), 0); }
+    function loanRemaining(loan) { return Number(loan.amount || 0) - loanPaid(loan); }
+
     function pageEmprestimos() {
-      const loans = [...db.hub_loans].sort((a, b) => new Date(b.date) - new Date(a.date));
-      const active = loans.filter(l => !l.returned);
+      const loans = [...db.hub_loans].sort((a, b) => new Date(b.date) - new Date(a.date)); const active = loans.filter(l => !l.returned);
       const returned = loans.filter(l => l.returned);
       const totalActive = active.reduce((s, l) => s + Number(l.amount || 0), 0);
       const now = new Date();
@@ -727,24 +790,33 @@
           <button class="btn-p" onclick="openModal('loan')">+ NOVO EMPRÉSTIMO</button>
         </div>
         ${active.length === 0 ? empty("Sem empréstimos activos") : `
-        <div style="overflow-x:auto"><table class="tbl">
-          <thead><tr><th>Pessoa</th><th>Valor</th><th>Data</th><th>Prazo</th><th>Estado</th><th>Notas</th><th></th></tr></thead>
+        <table class="tbl">
+          <thead><tr><th>Pessoa</th><th>Total</th><th>Pago</th><th>Restante</th><th>Prazo</th><th>Estado</th><th></th></tr></thead>
           <tbody>${active.map(l => {
         const isOverdue = l.dueDate && new Date(l.dueDate) < now;
+        const paid = loanPaid(l), remaining = loanRemaining(l);
         return `<tr>
               <td style="font-weight:700;color:#e8e4d9">${l.person}</td>
-              <td style="color:#ff7850;font-weight:700">${fKz(l.amount)}</td>
-              <td>${fDate(l.date)}</td>
+              <td style="color:#ff7850">${fKz(l.amount)}</td>
+              <td style="color:#50c878">${fKz(paid)}</td>
+              <td style="font-weight:700;color:${remaining <= 0 ? "#50c878" : "#c9a84c"}">${fKz(remaining)}</td>
               <td style="color:${isOverdue ? "#ff5050" : "#777"}">${l.dueDate ? fDate(l.dueDate) : "—"}</td>
               <td>${isOverdue ? '<span class="cat-badge red">EM ATRASO</span>' : '<span class="cat-badge green">EM DIA</span>'}</td>
-              <td style="color:#555;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.notes || "—"}</td>
-              <td style="display:flex;gap:4px">
+              <td style="display:flex;gap:4px;flex-wrap:wrap">
+                <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="openModal('loan','${l.id}')">✎</button>
+                <button class="btn-ghost" style="padding:4px 9px;font-size:11px;color:#50c878;border-color:#50c87844" onclick="openModal('loan-payment','${l.id}')">💰</button>
                 <button class="btn-d" style="color:#50c878;border-color:#50c87844" onclick="markLoanReturned('${l.id}')">✓</button>
                 <button class="btn-d" onclick="del('hub_loans','${l.id}')">✕</button>
               </td>
-            </tr>`;
-      }).join("")}</tbody>
-        </table></div>`}
+            </tr>
+            ${(l.payments || []).length > 0 ? `<tr><td colspan="7" style="padding:4px 10px 10px;background:#0b0b14">
+              <div style="font-size:10px;color:#555;letter-spacing:1px;margin-bottom:4px">HISTÓRICO DE PAGAMENTOS</div>
+              ${(l.payments || []).map(p => `<span style="display:inline-block;margin:2px 8px 2px 0;font-size:11px;color:#7eb8f7">${fDate(p.date)}: ${fKz(p.amount)}</span>`).join("")}
+            </td></tr>`: ""}`;
+      }).join("")}
+          </tbody>
+        </table>`}
+
         ${returned.length > 0 ? `
         <div style="margin-top:16px;opacity:.5">
           <div class="sec-title" style="color:#555">Já Devolvidos</div>
@@ -755,14 +827,44 @@
         </div>`: ""}
       </div>
 
-      ${modal === "loan" ? modalForm("NOVO EMPRÉSTIMO", "loan", [
-        { id: "person", label: "Nome da Pessoa", type: "text", placeholder: "ex: João" },
-        { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 50000" },
-        { id: "date", label: "Data do Empréstimo", type: "date", val: today() },
-        { id: "dueDate", label: "Prazo para Devolver", type: "date", val: "" },
-        { id: "notes", label: "Notas", type: "text", placeholder: "Opcional..." },
-      ]) : ""}`;
+      ${modal === "loan" ? (() => {
+          const editing = modalState?.editId ? db.hub_loans.find(l => String(l.id) === String(modalState.editId)) : null;
+          return modalForm(editing ? "EDITAR EMPRÉSTIMO" : "NOVO EMPRÉSTIMO", "loan", [
+            { id: "person", label: "Nome da Pessoa", type: "text", placeholder: "ex: João", val: editing?.person || "" },
+            { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 50000", val: editing?.amount || "" },
+            { id: "date", label: "Data do Empréstimo", type: "date", val: editing?.date || today() },
+            { id: "dueDate", label: "Prazo para Devolver", type: "date", val: editing?.dueDate || "" },
+            { id: "notes", label: "Notas", type: "text", placeholder: "Opcional...", val: editing?.notes || "" },
+          ]);
+        })() : ""}
+  ${modal === "loan-payment" ? (() => {
+          const loan = db.hub_loans.find(l => String(l.id) === String(modalState?.editId));
+          if (!loan) return "";
+          return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-title">REGISTAR PAGAMENTO — ${loan.person}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:16px">Restante a pagar: <span style="color:#c9a84c;font-weight:700">${fKz(loanRemaining(loan))}</span></div>
+      <div class="field" style="margin-bottom:12px"><label>Data do Pagamento</label><input type="date" id="lp-date" value="${today()}"/></div>
+      <div class="field" style="margin-bottom:20px"><label>Valor Pago (Kz)</label><input type="number" id="lp-amount" placeholder="ex: 10000"/></div>
+      <div style="display:flex;gap:12px">
+        <button class="btn-p" style="flex:1" onclick="saveLoanPayment('${loan.id}')">GUARDAR</button>
+        <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+      </div>
+    </div></div>`;
+        })() : ""}`;
     }
+
+    window.saveLoanPayment = async function (loanId) {
+      const date = document.getElementById("lp-date")?.value;
+      const amount = parseFloat(document.getElementById("lp-amount")?.value) || 0;
+      if (!amount) return alert("Valor obrigatório.");
+      const loan = db.hub_loans.find(l => String(l.id) === String(loanId));
+      if (!loan) return;
+      const payments = [...(loan.payments || []), { id: uid(), date, amount }];
+      const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
+      const autoReturned = totalPaid >= Number(loan.amount || 0);
+      await saveDoc("hub_loans", { ...loan, payments, returned: autoReturned });
+      modal = null; render();
+    };
 
     window.markLoanReturned = async function (id) {
       if (!confirm("Marcar como devolvido?")) return;
@@ -773,10 +875,11 @@
     window.saveModal_loan = async function () {
       const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), dueDate = gv("dueDate"), notes = gv("notes");
       if (!person || !amount) return alert("Nome e valor obrigatórios.");
-      await saveDoc("hub_loans", { id: uid(), person, amount, date, dueDate, notes, returned: false });
+      const editing = modalState?.editId ? db.hub_loans.find(l => String(l.id) === String(modalState.editId)) : null;
+      const id = modalState?.editId || uid();
+      await saveDoc("hub_loans", { id, person, amount, date, dueDate, notes, returned: editing?.returned || false, payments: editing?.payments || [] });
       modal = null; render();
     };
-
     window.markReturned = async function (id) {
       if (!confirm("Marcar como devolvido?")) return;
       const item = db.hub_custody.find(x => x.id === id);
@@ -918,7 +1021,7 @@
   </div></div>`;
     }
 
-    function openModal(t) { modal = t; render(); }
+    function openModal(t, editId = null) { modal = t; modalState = { editId }; render(); }
     function closeModal() { modal = null; render(); }
     window.openModal = openModal; window.closeModal = closeModal;
 
@@ -938,29 +1041,33 @@
     // Bind modal saves dynamically since they're closures in page functions
     // We re-render pages and rebind via onclick strings calling global async functions
     window.saveModal_income = async function () {
-      const d = gv("date"), c = gv("category"), a = parseFloat(gv("amount") || 0), desc = gv("description");
+      const d = gv("date"), c = gv("category"), m = gv("method"), a = parseFloat(gv("amount") || 0), desc = gv("description");
       if (!a || !c) return alert("Preenche categoria e valor.");
-      await saveDoc("hub_income", { id: uid(), date: d, category: c, amount: a, description: desc });
+      await saveDoc("hub_income", { id: uid(), date: d, category: c, method: m, amount: a, description: desc });
       modal = null; render();
     };
+
     window.saveModal_expense = async function () {
-      const d = gv("date"), c = gv("category"), a = parseFloat(gv("amount") || 0), desc = gv("description");
+      const d = gv("date"), c = gv("category"), m = gv("method"), a = parseFloat(gv("amount") || 0), desc = gv("description");
       if (!a || !c) return alert("Preenche categoria e valor.");
-      await saveDoc("hub_expenses", { id: uid(), date: d, category: c, amount: a, description: desc });
+      await saveDoc("hub_expenses", { id: uid(), date: d, category: c, method: m, amount: a, description: desc });
       modal = null; render();
     };
+
     window.saveModal_taxi_in = async function () {
       const d = gv("date"), t = gv("type"), a = parseFloat(gv("amount") || 0), n = gv("notes");
       if (!a) return alert("Valor obrigatório.");
       await saveDoc("hub_taxi", { id: uid(), date: d, type: t, amount: a, notes: n });
       modal = null; render();
     };
+
     window.saveModal_taxi_cost = async function () {
       const d = gv("date"), c = gv("category"), a = parseFloat(gv("amount") || 0), desc = gv("description");
       if (!a || !c) return alert("Categoria e valor obrigatórios.");
       await saveDoc("hub_taxi_costs", { id: uid(), date: d, category: c, amount: a, description: desc });
       modal = null; render();
     };
+
     window.saveModal_custody = async function () {
       const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), account = gv("account"), notes = gv("notes");
       if (!person || !amount) return alert("Nome e valor obrigatórios.");
