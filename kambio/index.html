@@ -11,6 +11,8 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
     import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, enableIndexedDbPersistence }
       from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut }
+      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
     // ══════════════════════════════════════════════════════════════════
     //  🔧 CONFIGURAÇÃO FIREBASE — substitui pelos teus valores
@@ -26,12 +28,18 @@
     };
     // ══════════════════════════════════════════════════════════════════
 
-    const COLLECTIONS = ["lots", "sales", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers"];
+    const COLLECTIONS = ["lots", "sales", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes"];
     const DEFAULT_WALLETS = ["RedotPay", "Binance", "Bybit", "Kast", "Grey"];
-    const DEFAULT_ACCOUNTS = ["BFA", "BAI", "Multicaixa Express (Avó/Irmãos)", "PayPay"];
-
-    let app, db_fire;
-    let db = { lots: [], sales: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [] };
+    const DEFAULT_ACCOUNTS = [
+      { name: "BFA", type: "pessoal" },
+      { name: "BCI", type: "negocio" },
+      { name: "BAI", type: "negocio" },
+      { name: "Multicaixa Express (Avó/Irmãos)", type: "negocio" },
+      { name: "PayPay", type: "negocio" },
+      { name: "É-Kwanza", type: "negocio" },
+    ];
+    let app, db_fire, auth, currentUser = null;
+    let db = { lots: [], sales: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [] };
     let unsubscribers = [];
 
     // ── LOCAL FALLBACK (quando Firebase não está configurado) ──────────
@@ -46,7 +54,7 @@
     }
 
     // ── FIREBASE INIT ──────────────────────────────────────────────────
-    async function initFirebase() {
+    async function initAppAndAuth() {
       if (!isConfigured()) {
         console.warn("Firebase não configurado — usando localStorage.");
         db = localLoad();
@@ -55,10 +63,17 @@
         setStatus("offline-local");
         return;
       }
+      app = initializeApp(firebaseConfig);
+      auth = getAuth(app);
+      onAuthStateChanged(auth, (user) => {
+        if (user) { currentUser = user; initFirebase(); }
+        else { currentUser = null; renderLogin(); }
+      });
+    }
+
+    async function initFirebase() {
       try {
-        app = initializeApp(firebaseConfig);
-        db_fire = getFirestore(app);
-        await enableIndexedDbPersistence(db_fire).catch(() => { });
+        db_fire = getFirestore(app); await enableIndexedDbPersistence(db_fire).catch(() => { });
         setStatus("connecting");
         COLLECTIONS.forEach(col => {
           const unsub = onSnapshot(collection(db_fire, col), snap => {
@@ -113,8 +128,8 @@
           await saveDoc("wallets", { id: i + 1, name: n, balance: 0, asset: "USDT" });
       }
       if (db.accounts.length === 0) {
-        for (const [i, n] of DEFAULT_ACCOUNTS.entries())
-          await saveDoc("accounts", { id: i + 1, name: n, balance: 0 });
+        for (const [i, a] of DEFAULT_ACCOUNTS.entries())
+          await saveDoc("accounts", { id: i + 1, name: a.name, balance: 0, type: a.type });
       }
       seeded = true;
     }
@@ -169,12 +184,59 @@
       { id: "settings", "label": "Definições", icon: "⚙" },
     ];
 
+    function renderLogin(error = "") {
+      document.getElementById("app").innerHTML = `
+      <div class="login-wrap">
+        <div class="login-card">
+          <div class="brand-name" style="text-align:center">KÂMBIO</div>
+          <div class="brand-sub" style="text-align:center;margin-bottom:22px">BUSINESS · PRO</div>
+          ${error ? `<div style="color:#ff5050;font-size:12px;margin-bottom:12px;text-align:center">${error}</div>` : ""}
+          <div class="field" style="margin-bottom:12px"><label>Email</label><input type="email" id="login-email"/></div>
+          <div class="field" style="margin-bottom:20px"><label>Palavra-passe</label>
+            <input type="password" id="login-pass" onkeydown="if(event.key==='Enter')doLogin()"/></div>
+          <button class="btn-primary" style="width:100%" onclick="doLogin()">ENTRAR</button>
+        </div>
+      </div>`;
+    }
+
+    window.doLogin = async function () {
+      const email = document.getElementById("login-email")?.value?.trim();
+      const pass = document.getElementById("login-pass")?.value;
+      if (!email || !pass) return renderLogin("Preenche email e palavra-passe.");
+      try { await signInWithEmailAndPassword(auth, email, pass); }
+      catch { renderLogin("Email ou palavra-passe incorretos."); }
+    };
+
+    window.doLogout = async function () { await signOut(auth); };
+
+    function withFocusPreserved(updateFn) {
+      const active = document.activeElement;
+      const id = active && active.id;
+      let start = null, end = null;
+      try {
+        if (active && typeof active.selectionStart === "number") {
+          start = active.selectionStart;
+          end = active.selectionEnd;
+        }
+      } catch { }
+      updateFn();
+      if (id) {
+        const el = document.getElementById(id);
+        if (el) {
+          el.focus();
+          if (start !== null && el.setSelectionRange) { try { el.setSelectionRange(start, end); } catch { } }
+        }
+      }
+    }
+
     // ── RENDER LOOP ────────────────────────────────────────────────────
     function render() {
       const app = document.getElementById("app");
       if (!app) return;
-      app.innerHTML = buildLayout();
-      attachEvents();
+      withFocusPreserved(() => {
+        app.innerHTML = buildLayout();
+        attachEvents();
+      });
     }
 
     function buildLayout() {
@@ -196,6 +258,7 @@
           ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + walletBalance(w.id); }); return Object.entries(t).map(([a, v]) => `<div class="qrow"><span>${a}</span><span style="color:#7eb8f7;font-weight:700">${fAsset(v, a)}</span></div>`).join(""); })()}
           <div class="qrow"><span>Kz Total</span><span style="color:#c9a84c;font-weight:700">${fKz(db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0))}</span></div>
           <div id="sync-status" style="margin-top:8px"></div>
+          <button class="btn-ghost" style="width:100%;margin-top:10px;font-size:10px" onclick="doLogout()">SAIR ⏻</button>  
         </div>
       </aside>
       <div class="veil" id="veil" onclick="closeMenu()"></div>
@@ -341,11 +404,16 @@
             ${db.wallets.map(w => `<option value="${w.id}">${w.name} · ${w.asset || "USDT"} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
           </select>
         </div>
-        <div class="field"><label>Conta de Pagamento (Kz) *</label>
-          <select id="b-account">
-            <option value="">— Seleccionar —</option>
-            ${db.accounts.map(a => `<option value="${a.id}">${a.name} (${fKz(a.balance)})</option>`).join("")}
-          </select>
+        <div class="field full"><label>Contas de Pagamento (podes dividir entre várias) *</label>
+          <div id="b-accounts-wrap" style="display:flex;flex-direction:column;gap:6px;border:1px solid #1e1e30;border-radius:2px;padding:10px">
+            ${db.accounts.filter(a => a.type !== 'pessoal').map(a => `
+              <div style="display:flex;align-items:center;gap:8px">
+                <input type="checkbox" id="b-acc-chk-${a.id}" onchange="toggleBuyAccount('${a.id}')" style="width:auto"/>
+                <span style="flex:1;font-size:12px">${a.name} <span style="color:#555">(${fKz(a.balance)})</span></span>
+                <input type="number" id="b-acc-val-${a.id}" placeholder="0" style="width:110px" disabled oninput="calcBuyTotal()"/>
+              </div>`).join("")}
+          </div>
+          <div style="font-size:11px;color:#555;margin-top:6px">Total distribuído: <span id="b-acc-sum" style="color:#c9a84c;font-weight:700">0,00 Kz</span></div>
         </div>
         <div class="field full"><label>Notas</label><input type="text" id="b-notes" placeholder="Opcional..."/></div>
       </div>
@@ -384,12 +452,28 @@
       if (document.getElementById("b-asset-label")) document.getElementById("b-asset-label").textContent = a;
       if (document.getElementById("b-asset-label2")) document.getElementById("b-asset-label2").textContent = a;
     };
+
     window.calcBuyTotal = function () {
       const u = parseFloat(document.getElementById("b-usdt")?.value) || 0;
       const r = parseFloat(document.getElementById("b-rate")?.value) || 0;
       const el = document.getElementById("b-total");
       if (el) el.textContent = fKz(u * r);
+      const sumEl = document.getElementById("b-acc-sum");
+      if (sumEl) {
+        const sum = db.accounts.filter(a => a.type !== 'pessoal').reduce((s, a) => s + (parseFloat(document.getElementById(`b-acc-val-${a.id}`)?.value) || 0), 0);
+        sumEl.textContent = fKz(sum);
+        sumEl.style.color = Math.abs(sum - (u * r)) < 0.01 ? "#50c878" : "#ff5050";
+      }
     };
+
+    window.toggleBuyAccount = function (id) {
+      const chk = document.getElementById(`b-acc-chk-${id}`);
+      const val = document.getElementById(`b-acc-val-${id}`);
+      if (val) val.disabled = !chk.checked;
+      if (!chk.checked && val) val.value = "";
+      calcBuyTotal();
+    };
+
     window.submitBuy = async function () {
       const date = document.getElementById("b-date")?.value;
       const asset = document.getElementById("b-asset")?.value?.trim() || "USDT";
@@ -400,10 +484,18 @@
       const usdt = parseFloat(document.getElementById("b-usdt")?.value) || 0;
       const rate = parseFloat(document.getElementById("b-rate")?.value) || 0;
       const walletId = document.getElementById("b-wallet")?.value;
-      const accountId = document.getElementById("b-account")?.value;
       const notes = document.getElementById("b-notes")?.value || "";
 
-      if (!usdt || !rate || !walletId || !accountId || !supName) return alert("Preenche todos os campos obrigatórios.");
+      const payments = db.accounts.filter(a => a.type !== 'pessoal')
+        .map(a => ({ account: a, val: parseFloat(document.getElementById(`b-acc-val-${a.id}`)?.value) || 0 }))
+        .filter(p => p.val > 0);
+      const totalPaid = payments.reduce((s, p) => s + p.val, 0);
+      const totalDue = usdt * rate;
+
+      if (!usdt || !rate || !walletId || !supName) return alert("Preenche todos os campos obrigatórios.");
+      if (payments.length === 0) return alert("Seleciona pelo menos uma conta de pagamento.");
+      if (Math.abs(totalPaid - totalDue) > 0.5) return alert(`O total distribuído (${fKz(totalPaid)}) não coincide com o total a pagar (${fKz(totalDue)}).`);
+      for (const p of payments) if (p.val > Number(p.account.balance)) return alert(`Saldo insuficiente em ${p.account.name}.`);
 
       const lot = {
         id: uid(), date, supplierName: supName, asset,
@@ -412,17 +504,16 @@
         notes, createdAt: new Date().toISOString(),
       };
 
-      // save new supplier if new
       if (supId === "__new" && supName) await saveDoc("suppliers", { id: uid(), name: supName, phone: "" });
 
       const wallet = db.wallets.find(w => String(w.id) === String(walletId));
-      const account = db.accounts.find(a => String(a.id) === String(accountId));
-
-      await bulkSave([
+      const updates = [
         { col: "lots", item: lot },
         { col: "wallets", item: { ...wallet, balance: Number(wallet.balance) + usdt } },
-        { col: "accounts", item: { ...account, balance: Number(account.balance) - (usdt * rate) } },
-      ]);
+      ];
+      payments.forEach(p => updates.push({ col: "accounts", item: { ...p.account, balance: Number(p.account.balance) - p.val } }));
+
+      await bulkSave(updates);
       alert("✅ Compra registada! Lote criado.");
       navigate("stock");
     };
@@ -446,75 +537,74 @@
       }).filter(Boolean);
 
       return `
-  <div class="grid2">
-    <div class="card">
-      <div class="sec-title">Registar Venda de USDT</div>
-      <div class="form-grid">
-        <div class="field"><label>Data *</label><input type="date" id="s-date" value="${today()}"/></div>
-        <div class="field"><label>Ativo a Vender *</label>
-          <select id="s-asset" onchange="onSellAssetChange(this.value)">
-            ${[...new Set(db.lots.map(l => l.asset || "USDT"))].map(a => `<option value="${a}" ${a === sellAsset ? "selected" : ""}>${a}</option>`).join("") || `<option value="USDT">USDT</option>`}
-          </select>
-        </div>
-        <div class="field"><label>Câmbio de Venda (Kz/${sellAsset}) *</label><input type="number" id="s-rate" placeholder="ex: 1150" value="${rate || ""}" oninput="refreshSell()"/></div>
-        <div class="field"><label>Cliente</label>
-          <select id="s-client" onchange="document.getElementById('s-aff').value=''">
-            <option value="">— Seleccionar —</option>
-            ${db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}
-          </select>
-        </div>
-        <div class="field"><label>Afiliado</label>
-          <select id="s-aff" onchange="document.getElementById('s-client').value=''">
-            <option value="">— Seleccionar —</option>
-            ${db.affiliates.map(a => `<option value="${a.id}">${a.name}</option>`).join("")}
-          </select>
-        </div>
-        <div class="field"><label>Conta de Recebimento (Kz) *</label>
-          <select id="s-account">
-            <option value="">— Seleccionar —</option>
-            ${db.accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join("")}
-          </select>
-        </div>
-        <div class="field"><label>Notas</label><input type="text" id="s-notes" placeholder="Opcional..."/></div>
-      </div>
+      <div class="grid2">
+        <div class="card">
+          <div class="sec-title">Registar Venda de USDT</div>
+          <div class="form-grid">
+            <div class="field"><label>Data *</label><input type="date" id="s-date" value="${today()}"/></div>
+            <div class="field"><label>Ativo a Vender *</label>
+              <select id="s-asset" onchange="onSellAssetChange(this.value)">
+                ${[...new Set(db.lots.map(l => l.asset || "USDT"))].map(a => `<option value="${a}" ${a === sellAsset ? "selected" : ""}>${a}</option>`).join("") || `<option value="USDT">USDT</option>`}
+              </select>
+            </div>
+            <div class="field"><label>Câmbio de Venda (Kz/${sellAsset}) *</label><input type="number" id="s-rate" placeholder="ex: 1150" value="${rate || ""}" oninput="refreshSell()"/></div>
+            <div class="field"><label>Cliente</label>
+              <select id="s-client" onchange="document.getElementById('s-aff').value=''">
+                <option value="">— Seleccionar —</option>
+                ${db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label>Afiliado</label>
+              <select id="s-aff" onchange="document.getElementById('s-client').value=''">
+                <option value="">— Seleccionar —</option>
+                ${db.affiliates.map(a => `<option value="${a.id}">${a.name}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label>Conta de Recebimento (Kz) *</label>
+              <select id="s-account">
+                <option value="">— Seleccionar —</option>
+                ${db.accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label>Notas</label><input type="text" id="s-notes" placeholder="Opcional..."/></div>
+          </div>
 
-      <div style="margin-top:16px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div style="font-size:11px;color:#c9a84c;letter-spacing:2px">LOTES A USAR</div>
-          <button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="addSellLot()">+ LOTE</button>
-        </div>
-        ${sellLots.length === 0 ? '<div style="font-size:12px;color:#444;padding:8px 0">Clica em "+ LOTE" para seleccionar o stock a vender.</div>' : ""}
-        <div id="sell-lots-wrap">
-          ${sellLots.map(entry => {
+          <div style="margin-top:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <div style="font-size:11px;color:#c9a84c;letter-spacing:2px">LOTES A USAR</div>
+              <button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="addSellLot()">+ LOTE</button>
+            </div>
+            ${sellLots.length === 0 ? '<div style="font-size:12px;color:#444;padding:8px 0">Clica em "+ LOTE" para seleccionar o stock a vender.</div>' : ""}
+            <div id="sell-lots-wrap">
+              ${sellLots.map(entry => {
         const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
         const spread = lot && rate ? fKz((rate - Number(lot.rateKz)) * Number(entry.usdt || 0)) : "—";
         const spreadColor = lot && rate && (rate - Number(lot.rateKz)) >= 0 ? "#50c878" : "#ff5050";
         return `
-            <div class="lot-entry" id="le-${entry.uid}">
-              <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
-                <div><label>Lote</label>
-                  <select onchange="updateSellLot('${entry.uid}','lotId',this.value)">
-                    <option value="">— Seleccionar —</option>
-                    ${availLots.map(l => `<option value="${l.id}" ${String(l.id) === String(entry.lotId) ? "selected" : ""}>${l.supplierName} · ${Number(l.rateKz).toLocaleString()} Kz · ${fAsset(l.remaining, sellAsset)} disp.</option>`).join("")}
-                  </select>
-                </div>
-                <div><label>Qtd ${sellAsset}${lot ? ` (max ${Number(lot.remaining).toFixed(2)})` : ""}                </label>
-                  <input type="number" min="0" step="0.01" value="${entry.usdt || ""}" placeholder="ex: 200" oninput="updateSellLot('${entry.uid}','usdt',this.value)"/>
-                </div>
-                <button class="btn-danger" onclick="removeSellLot('${entry.uid}')" style="align-self:flex-end">✕</button>
-                </div>
-                ${lot && entry.usdt && rate ? `<div style="margin-top:6px;font-size:11px;color:#666">
-                  Comprado a <span style="color:#c9a84c">${Number(lot.rateKz).toLocaleString()} Kz</span> · Spread: <span style="color:${spreadColor}">${spread}</span>
-              </div>`: ""}
-            </div>`;
+                <div class="lot-entry" id="le-${entry.uid}">
+                  <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
+                    <div><label>Lote</label>
+                      <select onchange="updateSellLot('${entry.uid}','lotId',this.value)">
+                        <option value="">— Seleccionar —</option>
+                        ${availLots.map(l => `<option value="${l.id}" ${String(l.id) === String(entry.lotId) ? "selected" : ""}>${l.supplierName} · ${Number(l.rateKz).toLocaleString()} Kz · ${fAsset(l.remaining, sellAsset)} disp.</option>`).join("")}
+                      </select>
+                    </div>
+                    <div><label>Qtd ${sellAsset}${lot ? ` (max ${Number(lot.remaining).toFixed(2)})` : ""}                </label>
+                  <input type="number" id="sl-usdt-${entry.uid}" min="0" step="0.01" value="${entry.usdt || ""}" placeholder="ex: 200" oninput="updateSellLot('${entry.uid}','usdt',this.value)"/>
+                </div>                    <button class="btn-danger" onclick="removeSellLot('${entry.uid}')" style="align-self:flex-end">✕</button>
+                    </div>
+                    ${lot && entry.usdt && rate ? `<div style="margin-top:6px;font-size:11px;color:#666">
+                      Comprado a <span style="color:#c9a84c">${Number(lot.rateKz).toLocaleString()} Kz</span> · Spread: <span style="color:${spreadColor}">${spread}</span>
+                  </div>`: ""}
+                </div>`;
       }).join("")}
+            </div>
+          </div>
+          <button class="btn-primary" style="width:100%;margin-top:14px" onclick="submitSell()">REGISTAR VENDA</button>
         </div>
-      </div>
-      <button class="btn-primary" style="width:100%;margin-top:14px" onclick="submitSell()">REGISTAR VENDA</button>
-    </div>
 
-    <div id="sell-summary-wrap">${buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown)}</div>
-  </div>`;
+        <div id="sell-summary-wrap">${buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown)}</div>
+      </div>`;
     }
 
     function buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown) {
@@ -883,18 +973,40 @@
         <div class="card">
           <div class="sec-title">Contas em Kwanzas</div>
           ${db.accounts.map(a => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-            <span style="flex:1;font-size:13px;color:#ccc">${a.name}</span>
+            <span style="flex:1;font-size:13px;color:#ccc">${a.name} <span class="badge ${a.type === 'pessoal' ? 'gold' : 'silver'}" style="font-size:9px;margin-left:6px">${a.type === 'pessoal' ? 'PESSOAL' : 'NEGÓCIO'}</span></span>
             <input type="number" style="width:130px" value="${a.balance}" onchange="adjAccount('${a.id}',this.value)"/>
             <span style="font-size:11px;color:#555;width:30px">Kz</span>
             <button class="btn-danger" onclick="delAccount('${a.id}')">✕</button>
           </div>`).join("")}
           <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
-            <div class="row bold"><span>TOTAL</span><span style="color:#c9a84c">${fKz(tK)}</span></div>
+            <div class="row"><span>Total Negócio</span><span style="color:#7eb8f7">${fKz(db.accounts.filter(a => a.type !== 'pessoal').reduce((s, a) => s + Number(a.balance || 0), 0))}</span></div>
+            <div class="row"><span>Total Pessoal</span><span style="color:#c9a84c">${fKz(db.accounts.filter(a => a.type === 'pessoal').reduce((s, a) => s + Number(a.balance || 0), 0))}</span></div>
+            <div class="row bold"><span>TOTAL GERAL</span><span style="color:#c9a84c">${fKz(tK)}</span></div>
           </div>
-          <div style="display:flex;gap:8px;margin-top:14px">
-            <input id="na2-name" placeholder="Nova conta" style="flex:1"/>
-            <input id="na2-bal" type="number" placeholder="Saldo" style="width:100px"/>
+          <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+            <input id="na2-name" placeholder="Nova conta" style="flex:1;min-width:100px"/>
+            <input id="na2-bal" type="number" placeholder="Saldo" style="width:90px"/>
+            <select id="na2-type" style="width:110px"><option value="negocio">Negócio</option><option value="pessoal">Pessoal</option></select>
             <button class="btn-ghost" onclick="addAccount2()">+</button>
+          </div>
+
+          <div style="margin-top:16px;border-top:1px solid #1a1a2e;padding-top:14px">
+            <div class="sec-title">🔄 Mover Dinheiro Entre Contas</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+              <select id="wd-from" style="flex:1;min-width:120px">
+                <option value="">Conta de origem</option>
+                ${db.accounts.map(a => `<option value="${a.id}">${a.name} (${fKz(a.balance)})</option>`).join("")}
+              </select>
+              <select id="wd-to" style="flex:1;min-width:120px">
+                <option value="">Conta de destino</option>
+                ${db.accounts.map(a => `<option value="${a.id}">${a.name} (${fKz(a.balance)})</option>`).join("")}
+              </select>
+            </div>
+            <div style="display:flex;gap:8px">
+              <input id="wd-amount" type="number" placeholder="Valor (Kz)" style="flex:1"/>
+              <button class="btn-primary" onclick="withdrawProfit()">MOVER</button>
+            </div>
+            <div style="font-size:10px;color:#555;margin-top:6px">Se o destino for uma conta Pessoal, isto regista automaticamente uma entrada de "Salário" no teu Hub Financeiro.</div>
           </div>
         </div>
       </div>`;
@@ -980,7 +1092,7 @@
           </select>
         </div>
         <div><label>Qtd${lot ? ` (max ${Number(lot.remaining).toFixed(4)})` : ""}</label>
-          <input type="number" min="0" step="0.0001" value="${entry.qty || ""}" placeholder="ex: 100" oninput="updateTransferLot('${entry.uid}','qty',this.value)"/>
+          <input type="number" id="tl-qty-${entry.uid}" min="0" step="0.0001" value="${entry.qty || ""}" placeholder="ex: 100" oninput="updateTransferLot('${entry.uid}','qty',this.value)"/>
         </div>
         <button class="btn-danger" onclick="removeTransferLot('${entry.uid}')">✕</button>
       </div>
@@ -993,11 +1105,14 @@
     window.addTransferLot = function () { transferLots.push({ uid: uid(), lotId: "", qty: "" }); render(); };
     window.removeTransferLot = function (u) { transferLots = transferLots.filter(e => String(e.uid) !== String(u)); renderTransfersLots(); };
     window.updateTransferLot = function (u, k, v) { transferLots = transferLots.map(e => String(e.uid) === String(u) ? { ...e, [k]: v } : e); renderTransfersLots(); };
+
     window.renderTransfersLots = function () {
       const fromId = document.getElementById("tr-from")?.value;
       const availLots = fromId ? walletStock(fromId) : [];
       const wrap = document.getElementById("transfer-lots-wrap");
-      if (wrap) wrap.innerHTML = buildTransferLotsHtml(availLots);
+      withFocusPreserved(() => {
+        if (wrap) wrap.innerHTML = buildTransferLotsHtml(availLots);
+      });
     };
 
     window.submitTransfer = async function () {
@@ -1053,44 +1168,37 @@
       render();
     };
 
-    window.renderTransfersForm = function () { render(); };
-
-    window.submitTransfer = async function () {
-      const date = document.getElementById("tr-date")?.value;
-      const fromId = document.getElementById("tr-from")?.value;
-      const toId = document.getElementById("tr-to")?.value;
-      const amount = parseFloat(document.getElementById("tr-amount")?.value) || 0;
-      const fee = parseFloat(document.getElementById("tr-fee")?.value) || 0;
-      const notes = document.getElementById("tr-notes")?.value || "";
-
-      if (!fromId || !toId || !amount) return alert("Preenche carteira de origem, destino e quantidade.");
-      if (fromId === toId) return alert("A carteira de origem e destino não podem ser iguais.");
-
-      const fromWallet = db.wallets.find(w => String(w.id) === String(fromId));
-      const toWallet = db.wallets.find(w => String(w.id) === String(toId));
-      if (!fromWallet || !toWallet) return alert("Carteira inválida.");
-      if ((fromWallet.asset || "USDT") !== (toWallet.asset || "USDT")) return alert("As carteiras devem ter o mesmo ativo.");
-      if (amount > Number(fromWallet.balance)) return alert("Saldo insuficiente na carteira de origem.");
-
-      const received = amount - fee;
-      const asset = fromWallet.asset || "USDT";
-      const transfer = { id: uid(), date, fromId: String(fromId), toId: String(toId), amount, fee, received, asset, notes, createdAt: new Date().toISOString() };
-
-      await bulkSave([
-        { col: "transfers", item: transfer },
-        { col: "wallets", item: { ...fromWallet, balance: Number(fromWallet.balance) - amount } },
-        { col: "wallets", item: { ...toWallet, balance: Number(toWallet.balance) + received } },
-      ]);
-      alert("✅ Transferência registada!");
-      render();
-    };
-
     window.adjWallet = async (id, v) => { const w = db.wallets.find(x => String(x.id) === String(id)); if (w) await saveDoc("wallets", { ...w, balance: parseFloat(v) || 0 }); };
     window.delWallet = async (id) => { if (confirm("Eliminar carteira?")) await delDoc("wallets", id); };
     window.adjAccount = async (id, v) => { const a = db.accounts.find(x => String(x.id) === String(id)); if (a) await saveDoc("accounts", { ...a, balance: parseFloat(v) || 0 }); };
     window.delAccount = async (id) => { if (confirm("Eliminar conta?")) await delDoc("accounts", id); };
     window.addWallet = async () => { const n = document.getElementById("nw-name")?.value?.trim(); if (!n) return; await saveDoc("wallets", { id: uid(), name: n, balance: parseFloat(document.getElementById("nw-bal")?.value) || 0, asset: document.getElementById("nw-asset")?.value?.trim() || "USDT" }); };
     window.addAccount2 = async () => { const n = document.getElementById("na2-name")?.value?.trim(); if (!n) return; await saveDoc("accounts", { id: uid(), name: n, balance: parseFloat(document.getElementById("na2-bal")?.value) || 0 }); };
+    window.withdrawProfit = async function () {
+      const fromId = document.getElementById("wd-from")?.value;
+      const toId = document.getElementById("wd-to")?.value;
+      const amount = parseFloat(document.getElementById("wd-amount")?.value) || 0;
+      if (!fromId || !toId || !amount) return alert("Preenche origem, destino e valor.");
+      if (fromId === toId) return alert("Origem e destino não podem ser iguais.");
+      const from = db.accounts.find(a => String(a.id) === String(fromId));
+      const to = db.accounts.find(a => String(a.id) === String(toId));
+      if (!from || !to) return alert("Conta inválida.");
+      if (amount > Number(from.balance)) return alert("Saldo insuficiente na conta de origem.");
+      await bulkSave([
+        { col: "accounts", item: { ...from, balance: Number(from.balance) - amount } },
+        { col: "accounts", item: { ...to, balance: Number(to.balance) + amount } },
+      ]);
+      if (to.type === "pessoal") {
+        await saveDoc("hub_income", {
+          id: uid(), date: today(), category: "Salário", method: to.name,
+          amount, description: `Retirada de lucro — ${from.name} → ${to.name}`
+        });
+        alert("✅ Movimento feito e registado no Hub como Salário.");
+      } else {
+        alert("✅ Movimento entre contas registado.");
+      }
+      render();
+    };
 
     // ── FINANCIAL ──────────────────────────────────────────────────────
     let finPeriod = "month";
@@ -1152,48 +1260,62 @@
     // ── SETTINGS ───────────────────────────────────────────────────────
     function pageSettings() {
       return `
-  <div class="grid2">
-    <div class="card">
-      <div class="sec-title">Fornecedores Frequentes</div>
-      ${db.suppliers.length === 0 ? '<div style="font-size:12px;color:#444;margin-bottom:12px">Sem fornecedores. Adiciona para seleccionar rapidamente ao comprar.</div>' : `
-      <table class="tbl" style="margin-bottom:12px">
-        <thead><tr><th>Nome</th><th>Telefone</th><th></th></tr></thead>
-        <tbody>${db.suppliers.map(s => `<tr>
-          <td style="font-weight:700">${s.name}</td>
-          <td style="color:#777">${s.phone || "—"}</td>
-          <td style="display:flex;gap:4px">
-            <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="editSup('${s.id}')">✎</button>
-            <button class="btn-danger" onclick="delSup('${s.id}')">✕</button>
-          </td>
-        </tr>`).join("")}</tbody>
-      </table>`}
-      <input type="hidden" id="ns-editid" value=""/>
-      <div style="display:flex;gap:8px">
-        <input id="ns-name" placeholder="Nome" style="flex:1"/>
-        <input id="ns-phone" placeholder="Telefone" style="width:130px"/>
-        <button class="btn-ghost" id="ns-submit" onclick="addSup()">+</button>
-      </div>
-    </div>
-    <div class="card">
-      <div class="sec-title">Dados & Backup</div>
-      <div style="display:flex;flex-direction:column;gap:12px">
-        <button class="btn-primary" onclick="exportData()">⬇ EXPORTAR BACKUP JSON</button>
-        <label class="btn-ghost" style="text-align:center;cursor:pointer;padding:8px 16px;font-size:12px">
-          ⬆ IMPORTAR BACKUP
-          <input type="file" accept=".json" onchange="importData(event)" style="display:none"/>
-        </label>
-        <div style="border-top:1px solid #1a1a2e;padding-top:12px">
-          <button class="btn-danger" style="width:100%;padding:10px" onclick="resetData()">⚠ APAGAR TODOS OS DADOS</button>
+      <div class="grid2">
+        <div class="card">
+          <div class="sec-title">Fornecedores Frequentes</div>
+          ${db.suppliers.length === 0 ? '<div style="font-size:12px;color:#444;margin-bottom:12px">Sem fornecedores. Adiciona para seleccionar rapidamente ao comprar.</div>' : `
+          <table class="tbl" style="margin-bottom:12px">
+            <thead><tr><th>Nome</th><th>Telefone</th><th></th></tr></thead>
+            <tbody>${db.suppliers.map(s => `<tr>
+              <td style="font-weight:700">${s.name}</td>
+              <td style="color:#777">${s.phone || "—"}</td>
+              <td style="display:flex;gap:4px">
+                <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="editSup('${s.id}')">✎</button>
+                <button class="btn-danger" onclick="delSup('${s.id}')">✕</button>
+              </td>
+            </tr>`).join("")}</tbody>
+          </table>`}
+          <input type="hidden" id="ns-editid" value=""/>
+          <div style="display:flex;gap:8px">
+            <input id="ns-name" placeholder="Nome" style="flex:1"/>
+            <input id="ns-phone" placeholder="Telefone" style="width:130px"/>
+            <button class="btn-ghost" id="ns-submit" onclick="addSup()">+</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="sec-title">Dados & Backup</div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <button class="btn-primary" onclick="exportData()">⬇ EXPORTAR BACKUP JSON</button>
+            <label class="btn-ghost" style="text-align:center;cursor:pointer;padding:8px 16px;font-size:12px">
+              ⬆ IMPORTAR BACKUP
+              <input type="file" accept=".json" onchange="importData(event)" style="display:none"/>
+            </label>
+            <div style="border-top:1px solid #1a1a2e;padding-top:12px">
+              <button class="btn-danger" style="width:100%;padding:10px" onclick="resetData()">⚠ APAGAR TODOS OS DADOS</button>
+            </div>
+          </div>
+          <div style="margin-top:16px;padding:12px;background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px">
+            <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:6px">ESTADO FIREBASE</div>
+            <div id="sync-status-2"></div>
+            ${!isConfigured() ? `<div style="font-size:11px;color:#888;margin-top:6px">Configure o Firebase no ficheiro HTML para sincronização entre dispositivos.</div>` : ""}
+          </div>
         </div>
       </div>
-      <div style="margin-top:16px;padding:12px;background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px">
-        <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:6px">ESTADO FIREBASE</div>
-        <div id="sync-status-2"></div>
-        ${!isConfigured() ? `<div style="font-size:11px;color:#888;margin-top:6px">Configure o Firebase no ficheiro HTML para sincronização entre dispositivos.</div>` : ""}
-      </div>
-    </div>
-  </div>`;
+      <div class="card" style="max-width:700px;margin:16px auto 0">
+        <div class="sec-title">📝 Notas & Ideias de Melhorias</div>
+        <div style="font-size:11px;color:#555;margin-bottom:14px">Regista aqui ideias, bugs a corrigir ou funcionalidades a implementar — tudo fica guardado no sistema.</div>
+        <textarea id="notes-text" rows="14" style="resize:vertical" placeholder="ex:&#10;- Adicionar filtro de vendas por afiliado&#10;- Corrigir cálculo do stock esgotado&#10;- Ligar ranking ao WhatsApp">${db.notes[0]?.text || ""}</textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+          <div style="font-size:10px;color:#555">${db.notes[0]?.updatedAt ? "Última atualização: " + new Date(db.notes[0].updatedAt).toLocaleString("pt-AO") : "Ainda sem notas guardadas"}</div>
+          <button class="btn-primary" onclick="saveNotes()">GUARDAR NOTAS</button>
+        </div>
+      </div>`;
     }
+    window.saveNotes = async function () {
+      const text = document.getElementById("notes-text")?.value || "";
+      await saveDoc("notes", { id: "main", text, updatedAt: new Date().toISOString() });
+      alert("✅ Notas guardadas!");
+    };
     window.delSup = async (id) => { if (confirm("Eliminar?")) await delDoc("suppliers", id); };
     window.addSup = async () => {
       const editId = document.getElementById("ns-editid")?.value;
@@ -1279,7 +1401,7 @@
     function attachEvents() { setStatus(isConfigured() ? "connecting" : "offline-local"); }
 
     // ── BOOT ───────────────────────────────────────────────────────────
-    initFirebase();
+    initAppAndAuth();
   </script>
 
   <style>
@@ -1786,6 +1908,24 @@
       .body {
         padding: 16px
       }
+    }
+
+    .login-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%
+    }
+
+    .login-card {
+      background: #0f0f1a;
+      border: 1px solid #c9a84c22;
+      border-top: 2px solid #c9a84c;
+      padding: 32px;
+      width: 100%;
+      max-width: 340px;
+      border-radius: 2px
     }
   </style>
 </head>

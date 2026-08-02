@@ -10,6 +10,8 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
     import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, enableIndexedDbPersistence }
       from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut }
+      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyD_dc1z0cLy0cqrtQhy52AuRnFosCtKANQ",
@@ -21,15 +23,23 @@
     };
 
     // ── COLLECTIONS ────────────────────────────────────────────────────
-    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "sales", "lots", "wallets", "accounts"];
+    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "sales", "lots", "wallets", "accounts", "hub_notes"];
 
-    let app, db_fire;
-    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], sales: [], lots: [], wallets: [], accounts: [] };
+    let app, db_fire, auth, currentUser = null;
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [] };
 
     // ── FIREBASE INIT ──────────────────────────────────────────────────
+    async function initAppAndAuth() {
+      app = initializeApp(firebaseConfig, "hub");
+      auth = getAuth(app);
+      onAuthStateChanged(auth, (user) => {
+        if (user) { currentUser = user; initFirebase(); }
+        else { currentUser = null; renderLogin(); }
+      });
+    }
+
     async function initFirebase() {
       try {
-        app = initializeApp(firebaseConfig, "hub");
         db_fire = getFirestore(app);
         await enableIndexedDbPersistence(db_fire).catch(() => { });
         setStatus("connecting");
@@ -56,6 +66,10 @@
       await deleteDoc(doc(db_fire, col, String(id)));
     }
 
+    async function bulkSave(updates) {
+      for (const u of updates) await saveDoc(u.col, u.item);
+    }
+
     function setStatus(s) {
       const el = document.getElementById("hub-status");
       if (!el) return;
@@ -75,6 +89,8 @@
     // ── FORMATTERS ─────────────────────────────────────────────────────
     const fKz = v => `${Number(v || 0).toLocaleString("pt-AO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kz`;
     const fUSD = v => `$${Number(v || 0).toFixed(2)}`;
+    const FIAT_ASSETS = ["EUR", "USD", "GBP"];
+    const fAsset = (v, asset = "Kz") => asset === "Kz" ? fKz(v) : `${Number(v || 0).toFixed(FIAT_ASSETS.includes(asset) ? 2 : 4)} ${asset}`;
     const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
@@ -99,13 +115,39 @@
       { id: "custodia", label: "Custódia", icon: "🔒" },
       { id: "emprestimos", label: "Empréstimos", icon: "💵" },
       { id: "calculadora", label: "Calculadora", icon: "⊕" },
+      { id: "definicoes", label: "Definições", icon: "⚙" },
     ];
 
     let page = "resumo";
     let modal = null;
-    let modalState=null;
+    let modalState = null;
     let resumoPeriod = "month";
     window.setResumoPeriod = function (p) { resumoPeriod = p; render(); };
+
+    function renderLogin(error = "") {
+      document.getElementById("app").innerHTML = `
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="brand-name" style="text-align:center">KÂMBIO</div>
+      <div class="brand-sub" style="text-align:center;margin-bottom:22px">BUSINESS · PRO</div>
+      ${error ? `<div style="color:#ff5050;font-size:12px;margin-bottom:12px;text-align:center">${error}</div>` : ""}
+      <div class="field" style="margin-bottom:12px"><label>Email</label><input type="email" id="login-email"/></div>
+      <div class="field" style="margin-bottom:20px"><label>Palavra-passe</label>
+        <input type="password" id="login-pass" onkeydown="if(event.key==='Enter')doLogin()"/></div>
+      <button class="btn-primary" style="width:100%" onclick="doLogin()">ENTRAR</button>
+    </div>
+  </div>`;
+    }
+
+    window.doLogin = async function () {
+      const email = document.getElementById("login-email")?.value?.trim();
+      const pass = document.getElementById("login-pass")?.value;
+      if (!email || !pass) return renderLogin("Preenche email e palavra-passe.");
+      try { await signInWithEmailAndPassword(auth, email, pass); }
+      catch { renderLogin("Email ou palavra-passe incorretos."); }
+    };
+
+    window.doLogout = async function () { await signOut(auth); };
 
     function render() {
       const el = document.getElementById("app");
@@ -130,6 +172,7 @@
           <div style="font-size:10px;color:#555;letter-spacing:2px;margin-bottom:6px">META 2026</div>
           ${goalBar()}
           <div id="hub-status" style="margin-top:8px"></div>
+          <button class="btn-ghost" style="width:100%;margin-top:10px;font-size:10px" onclick="doLogout()">SAIR ⏻</button>
         </div>
       </aside>
       <div class="veil" id="veil" onclick="closeMenu()"></div>
@@ -205,6 +248,7 @@
         case "custodia": return pageCustodia();
         case "emprestimos": return pageEmprestimos();
         case "calculadora": return pageCalculadora();
+        case "definicoes": return pageDefinicoes();
         default: return "";
       }
     }
@@ -769,6 +813,44 @@
     function loanPaid(loan) { return (loan.payments || []).reduce((s, p) => s + Number(p.amount || 0), 0); }
     function loanRemaining(loan) { return Number(loan.amount || 0) - loanPaid(loan); }
 
+    function loanModal() {
+      const editing = modalState?.editId ? db.hub_loans.find(l => String(l.id) === String(modalState.editId)) : null;
+      const asset = window._loanAsset || editing?.asset || "Kz";
+      const availLots = asset !== "Kz" ? db.lots.filter(l => (l.asset || "USDT") === asset && Number(l.remaining || 0) > 0) : [];
+      return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-title">${editing ? "EDITAR EMPRÉSTIMO" : "NOVO EMPRÉSTIMO"}</div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="field"><label>Nome da Pessoa</label><input id="m-person" value="${editing?.person || ""}" placeholder="ex: João"/></div>
+          <div class="field"><label>Tipo de Ativo</label>
+            <select id="m-loan-asset" onchange="onLoanAssetChange(this.value)" ${editing ? "disabled" : ""}>
+              <option value="Kz" ${asset === "Kz" ? "selected" : ""}>Kwanzas (Kz)</option>
+              ${[...new Set(db.lots.map(l => l.asset || "USDT"))].map(a => `<option value="${a}" ${asset === a ? "selected" : ""}>${a}</option>`).join("") || `<option value="USDT">USDT</option>`}
+            </select>
+          </div>
+          ${asset === "Kz" ? `
+          <div class="field"><label>Valor (Kz)</label><input id="m-amount" type="number" step="0.01" value="${editing?.amount || ""}" placeholder="ex: 50000"/></div>
+          ` : `
+          <div class="field"><label>Lote de Origem (stock ${asset})</label>
+            <select id="m-loan-lot">
+              <option value="">— Seleccionar —</option>
+              ${availLots.map(l => `<option value="${l.id}" ${String(l.id) === String(editing?.lotId) ? "selected" : ""}>${l.supplierName} · ${Number(l.rateKz).toLocaleString()} Kz · ${Number(l.remaining).toFixed(4)} disp.</option>`).join("")}
+            </select>
+          </div>
+          <div class="field"><label>Quantidade (${asset})</label><input id="m-amount" type="number" step="0.0001" value="${editing?.amount || ""}" placeholder="ex: 100"/></div>
+          <div style="font-size:10px;color:#888">O valor será deduzido do lote e da carteira escolhidos, tal como numa venda.</div>
+          `}
+          <div class="field"><label>Data do Empréstimo</label><input id="m-date" type="date" value="${editing?.date || today()}"/></div>
+          <div class="field"><label>Prazo para Devolver</label><input id="m-dueDate" type="date" value="${editing?.dueDate || ""}"/></div>
+          <div class="field"><label>Notas</label><input id="m-notes" value="${editing?.notes || ""}" placeholder="Opcional..."/></div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:20px">
+          <button class="btn-p" style="flex:1" onclick="saveModal_loan()">GUARDAR</button>
+          <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+        </div>
+      </div></div>`;
+    }
+    window.onLoanAssetChange = function (v) { window._loanAsset = v; render(); };
+
     function pageEmprestimos() {
       const loans = [...db.hub_loans].sort((a, b) => new Date(b.date) - new Date(a.date)); const active = loans.filter(l => !l.returned);
       const returned = loans.filter(l => l.returned);
@@ -795,12 +877,12 @@
           <tbody>${active.map(l => {
         const isOverdue = l.dueDate && new Date(l.dueDate) < now;
         const paid = loanPaid(l), remaining = loanRemaining(l);
+        const loanAsset = l.asset || "Kz";
         return `<tr>
-              <td style="font-weight:700;color:#e8e4d9">${l.person}</td>
-              <td style="color:#ff7850">${fKz(l.amount)}</td>
-              <td style="color:#50c878">${fKz(paid)}</td>
-              <td style="font-weight:700;color:${remaining <= 0 ? "#50c878" : "#c9a84c"}">${fKz(remaining)}</td>
-              <td style="color:${isOverdue ? "#ff5050" : "#777"}">${l.dueDate ? fDate(l.dueDate) : "—"}</td>
+              <td style="font-weight:700;color:#e8e4d9">${l.person} ${loanAsset !== "Kz" ? `<span class="cat-badge green" style="margin-left:4px">${loanAsset}</span>` : ""}</td>
+              <td style="color:#ff7850">${fAsset(l.amount, loanAsset)}</td>
+              <td style="color:#50c878">${fAsset(paid, loanAsset)}</td>
+              <td style="font-weight:700;color:${remaining <= 0 ? "#50c878" : "#c9a84c"}">${fAsset(remaining, loanAsset)}</td>              <td style="color:${isOverdue ? "#ff5050" : "#777"}">${l.dueDate ? fDate(l.dueDate) : "—"}</td>
               <td>${isOverdue ? '<span class="cat-badge red">EM ATRASO</span>' : '<span class="cat-badge green">EM DIA</span>'}</td>
               <td style="display:flex;gap:4px;flex-wrap:wrap">
                 <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="openModal('loan','${l.id}')">✎</button>
@@ -811,7 +893,7 @@
             </tr>
             ${(l.payments || []).length > 0 ? `<tr><td colspan="7" style="padding:4px 10px 10px;background:#0b0b14">
               <div style="font-size:10px;color:#555;letter-spacing:1px;margin-bottom:4px">HISTÓRICO DE PAGAMENTOS</div>
-              ${(l.payments || []).map(p => `<span style="display:inline-block;margin:2px 8px 2px 0;font-size:11px;color:#7eb8f7">${fDate(p.date)}: ${fKz(p.amount)}</span>`).join("")}
+              ${(l.payments || []).map(p => `<span style="display:inline-block;margin:2px 8px 2px 0;font-size:11px;color:#7eb8f7">${fDate(p.date)}: ${fAsset(p.amount, l.asset || "Kz")}</span>`).join("")}
             </td></tr>`: ""}`;
       }).join("")}
           </tbody>
@@ -827,25 +909,18 @@
         </div>`: ""}
       </div>
 
-      ${modal === "loan" ? (() => {
-          const editing = modalState?.editId ? db.hub_loans.find(l => String(l.id) === String(modalState.editId)) : null;
-          return modalForm(editing ? "EDITAR EMPRÉSTIMO" : "NOVO EMPRÉSTIMO", "loan", [
-            { id: "person", label: "Nome da Pessoa", type: "text", placeholder: "ex: João", val: editing?.person || "" },
-            { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 50000", val: editing?.amount || "" },
-            { id: "date", label: "Data do Empréstimo", type: "date", val: editing?.date || today() },
-            { id: "dueDate", label: "Prazo para Devolver", type: "date", val: editing?.dueDate || "" },
-            { id: "notes", label: "Notas", type: "text", placeholder: "Opcional...", val: editing?.notes || "" },
-          ]);
-        })() : ""}
+      ${modal === "loan" ? loanModal() : ""}
+
+
   ${modal === "loan-payment" ? (() => {
           const loan = db.hub_loans.find(l => String(l.id) === String(modalState?.editId));
           if (!loan) return "";
           return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
       <div class="modal-title">REGISTAR PAGAMENTO — ${loan.person}</div>
-      <div style="font-size:12px;color:#888;margin-bottom:16px">Restante a pagar: <span style="color:#c9a84c;font-weight:700">${fKz(loanRemaining(loan))}</span></div>
+     <div style="font-size:12px;color:#888;margin-bottom:16px">Restante a pagar: <span style="color:#c9a84c;font-weight:700">${fAsset(loanRemaining(loan), loan.asset || "Kz")}</span></div>
+      ${loan.asset && loan.asset !== "Kz" ? `<div style="font-size:10px;color:#ff7850;margin-bottom:12px">⚠ Empréstimo em ${loan.asset}. Se a pessoa devolver em ${loan.asset}, o valor não entra automaticamente numa carteira — regista depois manualmente uma "compra" na Kâmbio se quiseres que volte ao stock.</div>` : ""}
       <div class="field" style="margin-bottom:12px"><label>Data do Pagamento</label><input type="date" id="lp-date" value="${today()}"/></div>
-      <div class="field" style="margin-bottom:20px"><label>Valor Pago (Kz)</label><input type="number" id="lp-amount" placeholder="ex: 10000"/></div>
-      <div style="display:flex;gap:12px">
+      <div class="field" style="margin-bottom:20px"><label>Valor Pago (${loan.asset || "Kz"})</label><input type="number" id="lp-amount" step="0.0001" placeholder="ex: 10000"/></div>      <div style="display:flex;gap:12px">
         <button class="btn-p" style="flex:1" onclick="saveLoanPayment('${loan.id}')">GUARDAR</button>
         <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
       </div>
@@ -873,18 +948,55 @@
     };
 
     window.saveModal_loan = async function () {
-      const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), dueDate = gv("dueDate"), notes = gv("notes");
+      const person = document.getElementById("m-person")?.value?.trim();
+      const asset = document.getElementById("m-loan-asset")?.value || "Kz";
+      const amount = parseFloat(document.getElementById("m-amount")?.value) || 0;
+      const date = document.getElementById("m-date")?.value;
+      const dueDate = document.getElementById("m-dueDate")?.value;
+      const notes = document.getElementById("m-notes")?.value || "";
       if (!person || !amount) return alert("Nome e valor obrigatórios.");
+
       const editing = modalState?.editId ? db.hub_loans.find(l => String(l.id) === String(modalState.editId)) : null;
       const id = modalState?.editId || uid();
-      await saveDoc("hub_loans", { id, person, amount, date, dueDate, notes, returned: editing?.returned || false, payments: editing?.payments || [] });
-      modal = null; render();
+      let lotId = editing?.lotId || null, walletId = editing?.walletId || null;
+
+      if (asset !== "Kz" && !editing) {
+        lotId = document.getElementById("m-loan-lot")?.value;
+        const lot = db.lots.find(l => String(l.id) === String(lotId));
+        if (!lot) return alert("Escolhe o lote de origem.");
+        if (amount > Number(lot.remaining)) return alert("Quantidade superior ao stock disponível no lote.");
+        walletId = lot.walletId;
+        const wallet = db.wallets.find(w => String(w.id) === String(walletId));
+        await bulkSave([
+          { col: "lots", item: { ...lot, remaining: Number(lot.remaining) - amount } },
+          { col: "wallets", item: { ...wallet, balance: Math.max(0, Number(wallet.balance) - amount) } },
+        ]);
+      }
+
+      await saveDoc("hub_loans", {
+        id, person, amount, asset, lotId, walletId, date, dueDate, notes,
+        returned: editing?.returned || false, payments: editing?.payments || []
+      });
+      modal = null; window._loanAsset = null; render();
     };
     window.markReturned = async function (id) {
       if (!confirm("Marcar como devolvido?")) return;
       const item = db.hub_custody.find(x => x.id === id);
       if (item) await saveDoc("hub_custody", { ...item, returned: true });
     };
+
+    function pageDefinicoes() {
+      return `
+      <div class="card" style="max-width:700px;margin:0 auto">
+        <div class="sec-title">📝 Notas & Ideias de Melhorias</div>
+        <div style="font-size:11px;color:#555;margin-bottom:14px">Regista aqui ideias, bugs a corrigir ou funcionalidades a implementar — tudo fica guardado no sistema.</div>
+        <textarea id="hub-notes-text" rows="14" style="resize:vertical" placeholder="ex:&#10;- Adicionar gráfico de evolução mensal&#10;- Corrigir cálculo do breakeven do táxi&#10;- Ligar custódia ao dashboard principal">${db.hub_notes[0]?.text || ""}</textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+          <div style="font-size:10px;color:#555">${db.hub_notes[0]?.updatedAt ? "Última atualização: " + new Date(db.hub_notes[0].updatedAt).toLocaleString("pt-AO") : "Ainda sem notas guardadas"}</div>
+          <button class="btn-p" onclick="saveHubNotes()">GUARDAR NOTAS</button>
+        </div>
+      </div>`;
+    }
 
     // ── CALCULADORA IMPORTAÇÃO ─────────────────────────────────────────
     function pageCalculadora() {
@@ -1075,7 +1187,13 @@
       modal = null; render();
     };
 
-    initFirebase();
+    window.saveHubNotes = async function () {
+      const text = document.getElementById("hub-notes-text")?.value || "";
+      await saveDoc("hub_notes", { id: "main", text, updatedAt: new Date().toISOString() });
+      alert("✅ Notas guardadas!");
+    };
+
+    initAppAndAuth();
   </script>
 
   <style>
@@ -1544,6 +1662,24 @@
       .body {
         padding: 16px
       }
+    }
+
+    .login-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%
+    }
+
+    .login-card {
+      background: #0f0f1a;
+      border: 1px solid #c9a84c22;
+      border-top: 2px solid #c9a84c;
+      padding: 32px;
+      width: 100%;
+      max-width: 340px;
+      border-radius: 2px
     }
   </style>
 </head>
