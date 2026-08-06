@@ -379,67 +379,68 @@
     function pageBuy() {
       const lots = [...db.lots].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 12);
       return `
-  <div class="grid2">
-    <div class="card">
-      <div class="sec-title">Registar Compra de USDT</div>
-      <div class="form-grid">
-        <div class="field"><label>Data *</label><input type="date" id="b-date" value="${today()}"/></div>
-        <div class="field"><label>Fornecedor</label>
-          <select id="b-sup" onchange="onSupChange()">
-            <option value="">— Seleccionar —</option>
-            ${db.suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join("")}
-            <option value="__new">+ Novo fornecedor...</option>
-          </select>
-        </div>
-        <div class="field" id="b-supname-wrap" style="display:none"><label>Nome do Fornecedor *</label><input type="text" id="b-supname" placeholder="ex: João Silva"/></div>
-        <div class="field"><label>Ativo *</label>
-          <input list="asset-options-buy" id="b-asset" value="USDT" oninput="onAssetChangeBuy()"/>
-          <datalist id="asset-options-buy"><option value="USDT"></option><option value="USDC"></option><option value="EUR"></option><option value="USD"></option></datalist>
-        </div>
-        <div class="field"><label>Quantidade <span id="b-asset-label">USDT</span> *</label><input type="number" id="b-usdt" placeholder="ex: 500" oninput="calcBuyTotal()"/></div>
-        <div class="field"><label>Câmbio de Compra (Kz/<span id="b-asset-label2">USDT</span>) *</label><input type="number" id="b-rate" placeholder="ex: 1130" oninput="calcBuyTotal()"/></div>        <div class="field"><label>Total a Pagar</label><div class="computed" id="b-total">0,00 Kz</div></div>
-        <div class="field"><label>Carteira de Destino *</label>
-          <select id="b-wallet">
-            <option value="">— Seleccionar —</option>
-            ${db.wallets.map(w => `<option value="${w.id}">${w.name} · ${w.asset || "USDT"} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
-          </select>
-        </div>
-        <div class="field full"><label>Contas de Pagamento (podes dividir entre várias) *</label>
-          <div id="b-accounts-wrap" style="display:flex;flex-direction:column;gap:6px;border:1px solid #1e1e30;border-radius:2px;padding:10px">
-            ${db.accounts.filter(a => a.type !== 'pessoal').map(a => `
-              <div style="display:flex;align-items:center;gap:8px">
-                <input type="checkbox" id="b-acc-chk-${a.id}" onchange="toggleBuyAccount('${a.id}')" style="width:auto"/>
-                <span style="flex:1;font-size:12px">${a.name} <span style="color:#555">(${fKz(a.balance)})</span></span>
-                <input type="number" id="b-acc-val-${a.id}" placeholder="0" style="width:110px" disabled oninput="calcBuyTotal()"/>
-              </div>`).join("")}
+      <div class="grid2">
+        <div class="card">
+          <div class="sec-title">Registar Compra de USDT</div>
+          <div class="form-grid">
+            <div class="field"><label>Data *</label><input type="date" id="b-date" value="${today()}"/></div>
+            <div class="field"><label>Fornecedor</label>
+              <select id="b-sup" onchange="onSupChange()">
+                <option value="">— Seleccionar —</option>
+                ${db.suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join("")}
+                <option value="__new">+ Novo fornecedor...</option>
+              </select>
+            </div>
+            <div class="field" id="b-supname-wrap" style="display:none"><label>Nome do Fornecedor *</label><input type="text" id="b-supname" placeholder="ex: João Silva"/></div>
+            <div class="field"><label>Ativo *</label>
+              <input list="asset-options-buy" id="b-asset" value="USDT" oninput="onAssetChangeBuy()"/>
+              <datalist id="asset-options-buy"><option value="USDT"></option><option value="USDC"></option><option value="EUR"></option><option value="USD"></option></datalist>
+            </div>
+            <div class="field"><label>Quantidade <span id="b-asset-label">USDT</span> *</label><input type="number" id="b-usdt" placeholder="ex: 500" oninput="calcBuyTotal()"/></div>
+            <div class="field"><label>Câmbio de Compra (Kz/<span id="b-asset-label2">USDT</span>) *</label><input type="number" id="b-rate" placeholder="ex: 1130" oninput="calcBuyTotal()"/></div>        <div class="field"><label>Total a Pagar</label><div class="computed" id="b-total">0,00 Kz</div></div>
+            <div class="field"><label>Carteira de Destino *</label>
+              <select id="b-wallet">
+                <option value="">— Seleccionar —</option>
+                ${db.wallets.map(w => `<option value="${w.id}">${w.name} · ${w.asset || "USDT"} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
+              </select>
+            </div>
+            <div class="field full"><label>Contas de Pagamento (podes dividir entre várias) *</label>
+              <div id="b-accounts-wrap" style="display:flex;flex-direction:column;gap:6px;border:1px solid #1e1e30;border-radius:2px;padding:10px">
+                ${db.accounts.filter(a => a.type !== 'pessoal').map(a => `
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <input type="checkbox" id="b-acc-chk-${a.id}" onchange="toggleBuyAccount('${a.id}')" style="width:auto"/>
+                    <span style="flex:1;font-size:12px">${a.name} <span style="color:#555">(${fKz(a.balance)})</span></span>
+                    <input type="number" id="b-acc-val-${a.id}" placeholder="0" style="width:90px" disabled oninput="clampBuyAccountValue('${a.id}')"/>
+                    <button type="button" class="btn-ghost" style="padding:9px 10px;font-size:10px" onclick="maxBuyAccount('${a.id}')">MÁX</button>
+                  </div>`).join("")}
+              </div>
+              <div style="font-size:11px;color:#555;margin-top:6px">Total distribuído: <span id="b-acc-sum" style="color:#c9a84c;font-weight:700">0,00 Kz</span> · Falta: <span id="b-acc-remaining" style="color:#ff7850;font-weight:700">0,00 Kz</span></div>
+            </div>
+            <div class="field full"><label>Notas</label><input type="text" id="b-notes" placeholder="Opcional..."/></div>
           </div>
-          <div style="font-size:11px;color:#555;margin-top:6px">Total distribuído: <span id="b-acc-sum" style="color:#c9a84c;font-weight:700">0,00 Kz</span></div>
+          <button class="btn-primary" style="width:100%;margin-top:16px" onclick="submitBuy()">REGISTAR COMPRA</button>
         </div>
-        <div class="field full"><label>Notas</label><input type="text" id="b-notes" placeholder="Opcional..."/></div>
-      </div>
-      <button class="btn-primary" style="width:100%;margin-top:16px" onclick="submitBuy()">REGISTAR COMPRA</button>
-    </div>
-    <div class="card">
-      <div class="sec-title">Lotes Recentes</div>
-      ${lots.length === 0 ? '<div class="empty">SEM LOTES</div>' : `
-      <div style="overflow-x:auto"><table class="tbl">
-       <thead><tr><th>Data</th><th>Fornecedor</th><th>Ativo</th><th>Qtd</th><th>Câmbio</th><th>Restante</th><th>Carteira</th></tr></thead>
-        <tbody>${lots.map(l => {
+        <div class="card">
+          <div class="sec-title">Lotes Recentes</div>
+          ${lots.length === 0 ? '<div class="empty">SEM LOTES</div>' : `
+          <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Data</th><th>Fornecedor</th><th>Ativo</th><th>Qtd</th><th>Câmbio</th><th>Restante</th><th>Carteira</th></tr></thead>
+            <tbody>${lots.map(l => {
         const w = db.wallets.find(x => String(x.id) === String(l.walletId));
         const asset = l.asset || "USDT";
         return `<tr>
-            <td>${fDate(l.date)}</td>
-            <td style="font-weight:700">${l.supplierName || "—"}</td>
-            <td style="color:#c084fc">${asset}</td>
-            <td style="color:#7eb8f7">${fAsset(l.usdt, asset)}</td>
-            <td style="color:#c9a84c">${Number(l.rateKz).toLocaleString()} Kz</td>
-            <td style="color:${Number(l.remaining) > 0 ? "#50c878" : "#555"}">${fAsset(l.remaining, asset)}</td>
-            <td style="color:#777">${w?.name || "—"}</td>
-          </tr>`;
+                <td>${fDate(l.date)}</td>
+                <td style="font-weight:700">${l.supplierName || "—"}</td>
+                <td style="color:#c084fc">${asset}</td>
+                <td style="color:#7eb8f7">${fAsset(l.usdt, asset)}</td>
+                <td style="color:#c9a84c">${Number(l.rateKz).toLocaleString()} Kz</td>
+                <td style="color:${Number(l.remaining) > 0 ? "#50c878" : "#555"}">${fAsset(l.remaining, asset)}</td>
+                <td style="color:#777">${w?.name || "—"}</td>
+              </tr>`;
       }).join("")}</tbody>
-      </table></div>`}
-    </div>
-  </div>`;
+          </table></div>`}
+        </div>
+      </div>`;
     }
 
     window.onSupChange = function () {
@@ -456,14 +457,42 @@
     window.calcBuyTotal = function () {
       const u = parseFloat(document.getElementById("b-usdt")?.value) || 0;
       const r = parseFloat(document.getElementById("b-rate")?.value) || 0;
+      const total = u * r;
       const el = document.getElementById("b-total");
-      if (el) el.textContent = fKz(u * r);
+      if (el) el.textContent = fKz(total);
       const sumEl = document.getElementById("b-acc-sum");
+      const remEl = document.getElementById("b-acc-remaining");
       if (sumEl) {
         const sum = db.accounts.filter(a => a.type !== 'pessoal').reduce((s, a) => s + (parseFloat(document.getElementById(`b-acc-val-${a.id}`)?.value) || 0), 0);
         sumEl.textContent = fKz(sum);
-        sumEl.style.color = Math.abs(sum - (u * r)) < 0.01 ? "#50c878" : "#ff5050";
+        const bateu = Math.abs(sum - total) < 0.01;
+        sumEl.style.color = bateu ? "#50c878" : "#ff5050";
+        if (remEl) {
+          if (!total) {
+            remEl.textContent = "— (define o câmbio e quantidade)";
+            remEl.style.color = "#555";
+          } else {
+            const falta = total - sum;
+            if (bateu) { remEl.textContent = "0,00 Kz ✓"; remEl.style.color = "#50c878"; }
+            else if (falta > 0) { remEl.textContent = fKz(falta) + " a distribuir"; remEl.style.color = "#ff7850"; }
+            else { remEl.textContent = fKz(Math.abs(falta)) + " EM EXCESSO"; remEl.style.color = "#ff5050"; }
+          }
+        }
       }
+    };
+
+    window.clampBuyAccountValue = function (accountId) {
+      const u = parseFloat(document.getElementById("b-usdt")?.value) || 0;
+      const r = parseFloat(document.getElementById("b-rate")?.value) || 0;
+      const total = u * r;
+      const val = document.getElementById(`b-acc-val-${accountId}`);
+      if (val && total) {
+        const outrosTotal = db.accounts.filter(a => a.type !== 'pessoal' && String(a.id) !== String(accountId))
+          .reduce((s, a) => s + (parseFloat(document.getElementById(`b-acc-val-${a.id}`)?.value) || 0), 0);
+        const maxPermitido = Math.max(0, total - outrosTotal);
+        if (parseFloat(val.value) > maxPermitido) val.value = maxPermitido.toFixed(2);
+      }
+      calcBuyTotal();
     };
 
     window.toggleBuyAccount = function (id) {
@@ -471,6 +500,26 @@
       const val = document.getElementById(`b-acc-val-${id}`);
       if (val) val.disabled = !chk.checked;
       if (!chk.checked && val) val.value = "";
+      calcBuyTotal();
+    };
+
+    window.maxBuyAccount = function (accountId) {
+      const account = db.accounts.find(a => String(a.id) === String(accountId));
+      if (!account) return;
+      const chk = document.getElementById(`b-acc-chk-${accountId}`);
+      const val = document.getElementById(`b-acc-val-${accountId}`);
+      if (!chk || !val) return;
+      chk.checked = true;
+      toggleBuyAccount(accountId);
+
+      const u = parseFloat(document.getElementById("b-usdt")?.value) || 0;
+      const r = parseFloat(document.getElementById("b-rate")?.value) || 0;
+      const total = u * r;
+      const outrosTotal = db.accounts.filter(a => a.type !== 'pessoal' && String(a.id) !== String(accountId))
+        .reduce((s, a) => s + (parseFloat(document.getElementById(`b-acc-val-${a.id}`)?.value) || 0), 0);
+      const maxPermitido = total ? Math.max(0, total - outrosTotal) : Number(account.balance);
+
+      val.value = Math.min(Number(account.balance), maxPermitido).toFixed(2);
       calcBuyTotal();
     };
 
@@ -776,15 +825,16 @@
         if (!q) return true;
         const hay = [c.name, c.phone, c.groupName, c.addedBy, ...(c.walletIds || [])].join(" ").toLowerCase();
         return hay.includes(q);
-      });
+      }).sort((a, b) => Number(a.id) - Number(b.id));
       return `<div class="card" style="overflow-x:auto">
       ${filtered.length === 0 ? '<div class="empty">SEM CLIENTES (ou sem resultados para a pesquisa)</div>' : `
-      <table class="tbl"><thead><tr><th>Nome</th><th>Telefone</th><th>Grupo</th><th>Adicionado por</th><th>Carteiras</th><th>Compras</th><th>Volume USDT</th><th>Lucro Gerado</th><th></th></tr></thead>
-      <tbody>${filtered.map(c => {
+      <table class="tbl"><thead><tr><th>#</th><th>Nome</th><th>Telefone</th><th>Grupo</th><th>Adicionado por</th><th>Carteiras</th><th>Compras</th><th>Volume USDT</th><th>Lucro Gerado</th><th></th></tr></thead>
+      <tbody>${filtered.map((c, idx) => {
         const ss = db.sales.filter(s => String(s.clientId) === String(c.id));
         const vol = ss.reduce((a, s) => a + Number(s.totalUsdt || 0), 0);
         const prf = ss.reduce((a, s) => a + Number(s.totalProfit || 0), 0);
         return `<tr>
+          <td style="color:#555">${idx + 1}</td>
           <td style="font-weight:700;color:#e8e4d9">${c.name}</td>
           <td style="color:#777">${c.phone || "—"}</td>
           <td style="color:#7eb8f7">${c.groupName || "—"}</td>
@@ -1220,40 +1270,41 @@
       const profit = sales.reduce((s, x) => s + Number(x.totalProfit || 0), 0);
 
       return `
-  <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
-    ${PERIODS.map(p => `<button class="${finPeriod === p.id ? "btn-primary" : "btn-ghost"}" style="font-size:11px;padding:7px 14px" onclick="setFinPeriod('${p.id}')">${p.label}</button>`).join("")}
-  </div>
-  <div class="grid4" style="margin-bottom:20px">
-    ${statCard("Receita (Vendas)", fKz(rev), "#7eb8f7", "▲")}
-    ${statCard("Custo (Compras)", fKz(cost), "#ff7850", "▼")}
-    ${statCard("Lucro Líquido", fKz(profit), profit >= 0 ? "#50c878" : "#ff5050", "◆")}
-    ${statCard("Vendas", sales.length, "#c9a84c", "◈")}
-  </div>
-  <div class="grid2">
-    <div class="card">
-      <div class="sec-title">💰 Gestão do Lucro</div>
-      <div style="font-size:12px;color:#666;margin-bottom:16px">Lucro de <span style="color:#c9a84c">${fKz(profit)}</span>:</div>
-      <div class="budget-box blue"><div class="budget-label">REINVESTIR (60%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(profit * .6)}</div><div style="font-size:10px;color:#444;margin-top:4px">Aumenta o capital de giro</div></div>
-      <div class="budget-box green"><div class="budget-label">SALÁRIO (30%)</div><div class="budget-val" style="color:#50c878">${fKz(profit * .3)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
-      <div class="budget-box gold"><div class="budget-label">POUPANÇA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit * .1)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>    </div>
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div class="sec-title" style="margin:0">Vendas do Período</div>
-        <button class="btn-danger" onclick="resetCollection('sales','Vendas')" style="font-size:10px">🗑 APAGAR VENDAS</button>
+      <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
+        ${PERIODS.map(p => `<button class="${finPeriod === p.id ? "btn-primary" : "btn-ghost"}" style="font-size:11px;padding:7px 14px" onclick="setFinPeriod('${p.id}')">${p.label}</button>`).join("")}
       </div>
-      ${sales.length === 0 ? '<div class="empty">SEM VENDAS</div>' : `
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>Data</th><th>USDT</th><th>Câmbio</th><th>Receita</th><th>Lucro</th></tr></thead>
-        <tbody>${[...sales].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 12).map(s => `<tr>
-          <td>${fDate(s.date)}</td>
-          <td style="color:#7eb8f7">${fU(s.totalUsdt)}</td>
-          <td style="color:#c9a84c">${Number(s.rateKz).toLocaleString()} Kz</td>
-          <td>${fKz(s.totalRevenue)}</td>
-          <td style="font-weight:700;color:${Number(s.totalProfit) >= 0 ? "#50c878" : "#ff5050"}">${fKz(s.totalProfit)}</td>
-        </tr>`).join("")}</tbody>
-      </table></div>`}
-    </div>
-  </div>`;
+      <div class="grid4" style="margin-bottom:20px">
+        ${statCard("Receita (Vendas)", fKz(rev), "#7eb8f7", "▲")}
+        ${statCard("Custo (Compras)", fKz(cost), "#ff7850", "▼")}
+        ${statCard("Lucro Líquido", fKz(profit), profit >= 0 ? "#50c878" : "#ff5050", "◆")}
+        ${statCard("Vendas", sales.length, "#c9a84c", "◈")}
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <div class="sec-title">💰 Gestão do Lucro</div>
+          <div style="font-size:12px;color:#666;margin-bottom:16px">Lucro de <span style="color:#c9a84c">${fKz(profit)}</span>:</div>
+          <div class="budget-box blue"><div class="budget-label">REINVESTIR (60%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(profit * .6)}</div><div style="font-size:10px;color:#444;margin-top:4px">Aumenta o capital de giro</div></div>
+          <div class="budget-box green"><div class="budget-label">SALÁRIO (30%)</div><div class="budget-val" style="color:#50c878">${fKz(profit * .3)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
+          <div class="budget-box gold"><div class="budget-label">POUPANÇA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit * .1)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>    </div>
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div class="sec-title" style="margin:0">Vendas do Período</div>
+            <button class="btn-danger" onclick="resetCollection('sales','Vendas')" style="font-size:10px">🗑 APAGAR VENDAS</button>
+          </div>
+          ${sales.length === 0 ? '<div class="empty">SEM VENDAS</div>' : `
+          <div style="overflow-x:auto;max-height:400px;overflow-y:auto"><table class="tbl">
+            <thead><tr><th>#</th><th>Data</th><th>USDT</th><th>Câmbio</th><th>Receita</th><th>Lucro</th></tr></thead>
+            <tbody>${[...sales].sort((a, b) => new Date(a.createdAt || a.date) - new Date(b.createdAt || b.date)).map((s, idx) => `<tr>
+              <td style="color:#555">${idx + 1}</td>
+              <td>${fDate(s.date)}</td>
+              <td style="color:#7eb8f7">${fU(s.totalUsdt)}</td>
+              <td style="color:#c9a84c">${Number(s.rateKz).toLocaleString()} Kz</td>
+              <td>${fKz(s.totalRevenue)}</td>
+              <td style="font-weight:700;color:${Number(s.totalProfit) >= 0 ? "#50c878" : "#ff5050"}">${fKz(s.totalProfit)}</td>
+            </tr>`).join("")}</tbody>
+          </table></div>`}
+        </div>
+      </div>`;
     }
     window.setFinPeriod = function (p) { finPeriod = p; render(); };
 
