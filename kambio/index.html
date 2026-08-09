@@ -1049,6 +1049,15 @@
     function pageWallets() {
       const assetTotals = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; assetTotals[a] = (assetTotals[a] || 0) + Number(w.balance || 0); });
       const tK = db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0);
+
+      // captura os valores atuais dos formulários antes de reconstruir o HTML
+      const nwNameVal = document.getElementById("nw-name")?.value || "";
+      const nwBalVal = document.getElementById("nw-bal")?.value || "";
+      const nwAssetVal = document.getElementById("nw-asset")?.value || "";
+      const na2NameVal = document.getElementById("na2-name")?.value || "";
+      const na2BalVal = document.getElementById("na2-bal")?.value || "";
+      const na2TypeVal = document.getElementById("na2-type")?.value || "negocio";
+
       return `
       <div class="grid2">
         <div class="card">
@@ -1067,9 +1076,9 @@
             ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + walletBalance(w.id); }); return Object.entries(t).map(([a, v]) => `<div class="row bold"><span>TOTAL ${a}</span><span style="color:#7eb8f7">${fAsset(v, a)}</span></div>`).join(""); })()}
           </div>
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-            <input id="nw-name" placeholder="Nova carteira" style="flex:1;min-width:100px"/>
-            <input id="nw-bal" type="number" placeholder="Saldo" style="width:90px"/>
-            <input list="asset-options" id="nw-asset" placeholder="Ativo" style="width:90px"/>
+            <input id="nw-name" placeholder="Nova carteira" style="flex:1;min-width:100px" value="${nwNameVal}"/>
+            <input id="nw-bal" type="number" placeholder="Saldo" style="width:90px" value="${nwBalVal}"/>
+            <input list="asset-options" id="nw-asset" placeholder="Ativo" style="width:90px" value="${nwAssetVal}"/>
             <datalist id="asset-options"><option value="USDT"></option><option value="USDC"></option><option value="EUR"></option><option value="USD"></option></datalist>
             <button class="btn-ghost" onclick="addWallet()">+</button>
           </div>
@@ -1088,12 +1097,14 @@
             <div class="row bold"><span>TOTAL GERAL</span><span style="color:#c9a84c">${fKz(tK)}</span></div>
           </div>
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-            <input id="na2-name" placeholder="Nova conta" style="flex:1;min-width:100px"/>
-            <input id="na2-bal" type="number" placeholder="Saldo" style="width:90px"/>
-            <select id="na2-type" style="width:110px"><option value="negocio">Negócio</option><option value="pessoal">Pessoal</option></select>
+            <input id="na2-name" placeholder="Nova conta" style="flex:1;min-width:100px" value="${na2NameVal}"/>
+            <input id="na2-bal" type="number" placeholder="Saldo" style="width:90px" value="${na2BalVal}"/>
+            <select id="na2-type" style="width:110px">
+              <option value="negocio" ${na2TypeVal === "negocio" ? "selected" : ""}>Negócio</option>
+              <option value="pessoal" ${na2TypeVal === "pessoal" ? "selected" : ""}>Pessoal</option>
+            </select>
             <button class="btn-ghost" onclick="addAccount2()">+</button>
           </div>
-
           <div style="margin-top:16px;border-top:1px solid #1a1a2e;padding-top:14px">
             <div class="sec-title">🔄 Mover Dinheiro Entre Contas</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
@@ -1277,7 +1288,7 @@
     window.adjAccount = async (id, v) => { const a = db.accounts.find(x => String(x.id) === String(id)); if (a) await saveDoc("accounts", { ...a, balance: parseFloat(v) || 0 }); };
     window.delAccount = async (id) => { if (confirm("Eliminar conta?")) await delDoc("accounts", id); };
     window.addWallet = async () => { const n = document.getElementById("nw-name")?.value?.trim(); if (!n) return; await saveDoc("wallets", { id: uid(), name: n, balance: parseFloat(document.getElementById("nw-bal")?.value) || 0, asset: document.getElementById("nw-asset")?.value?.trim() || "USDT" }); };
-    window.addAccount2 = async () => { const n = document.getElementById("na2-name")?.value?.trim(); if (!n) return; await saveDoc("accounts", { id: uid(), name: n, balance: parseFloat(document.getElementById("na2-bal")?.value) || 0 }); };
+    window.addAccount2 = async () => { const n = document.getElementById("na2-name")?.value?.trim(); if (!n) return; const type = document.getElementById("na2-type")?.value || "negocio"; await saveDoc("accounts", { id: uid(), name: n, balance: parseFloat(document.getElementById("na2-bal")?.value) || 0, type }); };
     window.withdrawProfit = async function () {
       const fromId = document.getElementById("wd-from")?.value;
       const toId = document.getElementById("wd-to")?.value;

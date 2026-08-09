@@ -95,6 +95,9 @@
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
 
+    const INCOME_CATS = ["Salário", "Serviços Extras", "Importação", "Táxi", "Outro"];
+    const EXPENSE_CATS = ["Alimentação", "Transporte", "Telecomunicações", "Lazer", "Vestuário", "Cota Juventude", "Investimento", "Outro"];
+
     function inPeriod(dateStr, period) {
       if (!dateStr) return false;
       const dt = new Date(dateStr);
@@ -335,12 +338,11 @@
 
       const income = db.hub_income.reduce((s, x) => s + Number(x.amount || 0), 0);
       const expenses = db.hub_expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
-      const balance = income - expenses;
 
-      const cashIncome = db.hub_income.filter(x => x.method === "Dinheiro em Mãos").reduce((s, x) => s + Number(x.amount || 0), 0);
-      const cashExpense = db.hub_expenses.filter(x => x.method === "Dinheiro em Mãos").reduce((s, x) => s + Number(x.amount || 0), 0);
-      const cashBalance = cashIncome - cashExpense;
-      const bankBalance = balance - cashBalance;
+      // Saldos reais, lidos diretamente das contas (fonte única da verdade)
+      const cashAccount = db.accounts.find(a => a.name === "Dinheiro em Mãos");
+      const cashBalance = cashAccount ? Number(cashAccount.balance || 0) : 0;
+      const bankBalance = db.accounts.filter(a => a.type === "pessoal" && a.name !== "Dinheiro em Mãos").reduce((s, a) => s + Number(a.balance || 0), 0);
 
       // Salário vs retirado, baseado no lucro da Kâmbio no período
       const kambioProfitP = db.sales.filter(s => inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
@@ -348,16 +350,20 @@
       const retiradoP = expenseP.reduce((s, x) => s + Number(x.amount || 0), 0);
       const excedente = retiradoP - salarioAlocado;
 
-      // Resumo por categoria (gastos do período)
+      // Resumo por categoria + subcategoria (gastos do período)
       const catTotals = {};
-      expenseP.forEach(x => { catTotals[x.category] = (catTotals[x.category] || 0) + Number(x.amount || 0); });
+      expenseP.forEach(x => {
+        const key = x.subcategory ? `${x.category} — ${x.subcategory}` : x.category;
+        catTotals[key] = (catTotals[key] || 0) + Number(x.amount || 0);
+      });
       const catSorted = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
       const maxCat = catSorted[0]?.[1] || 1;
 
-      const INCOME_CATS = ["Salário", "Serviços Extras", "Importação", "Táxi", "Outro"];
-      const EXPENSE_CATS = ["Alimentação", "Transporte", "Telecomunicações", "Lazer", "Vestuário", "Cota Juventude", "Investimento", "Outro"];
-      const METHODS = ["Conta Bancária", "Dinheiro em Mãos"];
-      const finPeriod2 = window._pessoalPeriod || "month";
+      // Gastos de hoje, do menor para o maior
+      const todayExpenses = [...db.hub_expenses].filter(x => x.date === today()).sort((a, b) => Number(a.amount) - Number(b.amount));
+      const todayTotal = todayExpenses.reduce((s, x) => s + Number(x.amount || 0), 0);
+
+      const accountName = (id) => db.accounts.find(a => String(a.id) === String(id))?.name || null;
 
       return `
       <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
@@ -370,6 +376,10 @@
         ${sc("Em Contas Bancárias", fKz(bankBalance), "#7eb8f7", "🏦")}
         ${sc("Dinheiro em Mãos", fKz(cashBalance), "#c9a84c", "💵")}
       </div>
+
+      ${!cashAccount ? `<div class="card" style="margin-bottom:20px;border-color:#ff785044">
+        <div style="font-size:12px;color:#ff7850">⚠ Ainda não existe uma conta "Dinheiro em Mãos" no Kâmbio. Cria-a em Kâmbio → Carteiras → Contas em Kwanzas (tipo Pessoal) para o saldo aparecer aqui corretamente.</div>
+      </div>` : ""}
 
       <div class="card" style="margin-bottom:20px;border-color:${excedente > 0 ? "#ff585033" : "#50c87833"}">
         <div class="sec-title">💡 Salário vs. Retirada (${RP.find(p => p.id === period)?.label})</div>
@@ -408,6 +418,21 @@
           </div>`).join("")}
       </div>
 
+      <div class="card" style="margin-bottom:20px">
+        <div class="sec-title">📋 Gastos de Hoje — do menor ao maior</div>
+        ${todayExpenses.length === 0 ? empty("Sem gastos registados hoje") : `
+        <table class="tbl">
+          <thead><tr><th>Categoria</th><th>Subcategoria</th><th>Conta</th><th>Valor</th></tr></thead>
+          <tbody>${todayExpenses.map(x => `<tr>
+            <td><span class="cat-badge red">${x.category}</span></td>
+            <td style="color:#888">${x.subcategory || "—"}</td>
+            <td style="color:#777;font-size:11px">${accountName(x.accountId) || x.method || "—"}</td>
+            <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
+          </tr>`).join("")}</tbody>
+        </table>
+        <div style="text-align:right;margin-top:10px;font-size:12px;color:#888">Total de hoje: <span style="color:#ff7850;font-weight:700">${fKz(todayTotal)}</span></div>`}
+      </div>
+
       <div class="grid2">
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -416,15 +441,15 @@
           </div>
           ${db.hub_income.length === 0 ? empty() : `
           <div style="overflow-x:auto"><table class="tbl">
-            <thead><tr><th>Data</th><th>Categoria</th><th>Método</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
+            <thead><tr><th>Data</th><th>Categoria</th><th>Conta</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
             <tbody>${[...db.hub_income].sort((a, b) => new Date(b.date) - new Date(a.date)).map(x => `
               <tr>
                 <td>${fDate(x.date)}</td>
-                <td><span class="cat-badge green">${x.category}</span></td>
-                <td style="color:#777;font-size:11px">${x.method || "—"}</td>
+                <td><span class="cat-badge green">${x.category}</span>${x.subcategory ? `<div style="font-size:10px;color:#666;margin-top:2px">${x.subcategory}</div>` : ""}</td>
+                <td style="color:#777;font-size:11px">${accountName(x.accountId) || x.method || "—"}</td>
                 <td style="color:#aaa">${x.description || "—"}</td>
                 <td style="color:#50c878;font-weight:700">${fKz(x.amount)}</td>
-                <td><button class="btn-d" onclick="del('hub_income','${x.id}')">✕</button></td>
+                <td><button class="btn-d" onclick="delIncomeEntry('${x.id}')">✕</button></td>
               </tr>`).join("")}
             </tbody>
           </table></div>`}
@@ -437,37 +462,58 @@
           </div>
           ${db.hub_expenses.length === 0 ? empty() : `
           <div style="overflow-x:auto"><table class="tbl">
-            <thead><tr><th>Data</th><th>Categoria</th><th>Método</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
+            <thead><tr><th>Data</th><th>Categoria</th><th>Conta</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
             <tbody>${[...db.hub_expenses].sort((a, b) => new Date(b.date) - new Date(a.date)).map(x => `
               <tr>
                 <td>${fDate(x.date)}</td>
-                <td><span class="cat-badge red">${x.category}</span></td>
-                <td style="color:#777;font-size:11px">${x.method || "—"}</td>
+                <td><span class="cat-badge red">${x.category}</span>${x.subcategory ? `<div style="font-size:10px;color:#666;margin-top:2px">${x.subcategory}</div>` : ""}</td>
+                <td style="color:#777;font-size:11px">${accountName(x.accountId) || x.method || "—"}</td>
                 <td style="color:#aaa">${x.description || "—"}</td>
                 <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
-                <td><button class="btn-d" onclick="del('hub_expenses','${x.id}')">✕</button></td>
+                <td><button class="btn-d" onclick="delExpenseEntry('${x.id}')">✕</button></td>
               </tr>`).join("")}
             </tbody>
           </table></div>`}
         </div>
       </div>
 
-      ${modal === "income" ? modalForm("NOVA ENTRADA", "income", [
-        { id: "date", label: "Data", type: "date", val: today() },
-        { id: "category", label: "Categoria", type: "select", opts: INCOME_CATS },
-        { id: "method", label: "Onde Entrou", type: "select", opts: METHODS },
-        { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 150000" },
-        { id: "description", label: "Descrição", type: "text", placeholder: "ex: Salário Junho" },
-      ]) : ""}
-        ${modal === "expense" ? modalForm("NOVA SAÍDA", "expense", [
-        { id: "date", label: "Data", type: "date", val: today() },
-        { id: "category", label: "Categoria", type: "select", opts: EXPENSE_CATS },
-        { id: "method", label: "Método de Pagamento", type: "select", opts: METHODS },
-        { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 5000" },
-        { id: "description", label: "Descrição", type: "text", placeholder: "ex: Supermercado Shoprite" },
-      ]) : ""}`;
+      ${modal === "income" ? incomeExpenseModal("income") : ""}
+      ${modal === "expense" ? incomeExpenseModal("expense") : ""}`;
     }
     window.setPessoalPeriod = function (p) { window._pessoalPeriod = p; render(); };
+    window.setPessoalPeriod = function (p) { window._pessoalPeriod = p; render(); };
+
+    function incomeExpenseModal(kind) {
+      const isIncome = kind === "income";
+      const col = isIncome ? "hub_income" : "hub_expenses";
+      const CATS = isIncome ? INCOME_CATS : EXPENSE_CATS;
+      const subcats = [...new Set(db[col].map(x => x.subcategory).filter(Boolean))];
+      return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-title">${isIncome ? "NOVA ENTRADA" : "NOVA SAÍDA"}</div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="field"><label>Data</label><input type="date" id="m-date" value="${today()}"/></div>
+          <div class="field"><label>Categoria</label>
+            <select id="m-category">${CATS.map(c => `<option>${c}</option>`).join("")}</select>
+          </div>
+          <div class="field"><label>Subcategoria (opcional)</label>
+            <input list="subcat-options-${kind}" id="m-subcategory" placeholder="ex: Táxi Trabalho, Táxi Universidade..."/>
+            <datalist id="subcat-options-${kind}">${subcats.map(s => `<option value="${s}"></option>`).join("")}</datalist>
+          </div>
+          <div class="field"><label>Conta</label>
+            <select id="m-accountId">
+              <option value="">— Seleccionar —</option>
+              ${db.accounts.map(a => `<option value="${a.id}">${a.name} · ${a.type === "pessoal" ? "PESSOAL" : "NEGÓCIO"} (${fKz(a.balance)})</option>`).join("")}
+            </select>
+          </div>
+          <div class="field"><label>Valor (Kz)</label><input type="number" id="m-amount" placeholder="ex: 5000" step="0.01"/></div>
+          <div class="field"><label>Descrição</label><input type="text" id="m-description" placeholder="ex: Táxi para o trabalho"/></div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:20px">
+          <button class="btn-p" style="flex:1" onclick="saveIncomeExpense('${kind}')">GUARDAR</button>
+          <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+        </div>
+      </div></div>`;
+    }
 
     // ── TÁXI ───────────────────────────────────────────────────────────
     function pageTaxi() {
@@ -1273,18 +1319,45 @@
 
     // Bind modal saves dynamically since they're closures in page functions
     // We re-render pages and rebind via onclick strings calling global async functions
-    window.saveModal_income = async function () {
-      const d = gv("date"), c = gv("category"), m = gv("method"), a = parseFloat(gv("amount") || 0), desc = gv("description");
-      if (!a || !c) return alert("Preenche categoria e valor.");
-      await saveDoc("hub_income", { id: uid(), date: d, category: c, method: m, amount: a, description: desc });
+    window.saveIncomeExpense = async function (kind) {
+      const isIncome = kind === "income";
+      const col = isIncome ? "hub_income" : "hub_expenses";
+      const date = document.getElementById("m-date")?.value;
+      const category = document.getElementById("m-category")?.value;
+      const subcategory = document.getElementById("m-subcategory")?.value?.trim() || "";
+      const accountId = document.getElementById("m-accountId")?.value;
+      const amount = parseFloat(document.getElementById("m-amount")?.value) || 0;
+      const description = document.getElementById("m-description")?.value || "";
+      if (!category || !amount) return alert("Preenche categoria e valor.");
+      if (!accountId) return alert("Escolhe a conta de onde o dinheiro entrou/saiu.");
+
+      const account = db.accounts.find(a => String(a.id) === String(accountId));
+      if (!account) return alert("Conta inválida.");
+
+      const newBalance = isIncome ? Number(account.balance) + amount : Number(account.balance) - amount;
+      await saveDoc("accounts", { ...account, balance: newBalance });
+      await saveDoc(col, { id: uid(), date, category, subcategory, accountId: String(accountId), amount, description });
       modal = null; render();
     };
 
-    window.saveModal_expense = async function () {
-      const d = gv("date"), c = gv("category"), m = gv("method"), a = parseFloat(gv("amount") || 0), desc = gv("description");
-      if (!a || !c) return alert("Preenche categoria e valor.");
-      await saveDoc("hub_expenses", { id: uid(), date: d, category: c, method: m, amount: a, description: desc });
-      modal = null; render();
+    window.delIncomeEntry = async function (id) {
+      if (!confirm("Eliminar esta entrada? O valor será removido do saldo da conta.")) return;
+      const entry = db.hub_income.find(x => String(x.id) === String(id));
+      if (entry?.accountId) {
+        const account = db.accounts.find(a => String(a.id) === String(entry.accountId));
+        if (account) await saveDoc("accounts", { ...account, balance: Number(account.balance) - Number(entry.amount) });
+      }
+      await delDoc("hub_income", id);
+    };
+
+    window.delExpenseEntry = async function (id) {
+      if (!confirm("Eliminar esta saída? O valor será devolvido ao saldo da conta.")) return;
+      const entry = db.hub_expenses.find(x => String(x.id) === String(id));
+      if (entry?.accountId) {
+        const account = db.accounts.find(a => String(a.id) === String(entry.accountId));
+        if (account) await saveDoc("accounts", { ...account, balance: Number(account.balance) + Number(entry.amount) });
+      }
+      await delDoc("hub_expenses", id);
     };
 
     window.saveModal_taxi_in = async function () {
