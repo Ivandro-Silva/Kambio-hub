@@ -591,87 +591,124 @@
         </div>
         ${imports.length === 0 ? empty("Sem encomendas. Regista a tua primeira importação.") : `
         <div style="overflow-x:auto"><table class="tbl">
-          <thead><tr><th>Data</th><th>Produto</th><th>Cartão</th><th>Custo Total</th><th>Venda</th><th>Lucro</th><th>Estado</th><th></th></tr></thead>
-          <tbody>${imports.map(i => `<tr>
+          <thead><tr><th>Data</th><th>Produto</th><th>Plataforma / Loja</th><th>Custo Total</th><th>Venda</th><th>Lucro</th><th>Estado</th><th></th></tr></thead>
+          <tbody>${imports.map(i => {
+        const arrivalDate = importStatusDate(i, "em_angola");
+        const soldDate = importStatusDate(i, "vendido");
+        const daysToArrive = daysBetween(i.orderDate, arrivalDate);
+        const daysToSell = daysBetween(arrivalDate || i.orderDate, soldDate);
+        const daysTotal = daysBetween(i.orderDate, soldDate);
+        return `<tr>
             <td>${fDate(i.orderDate)}</td>
             <td style="font-weight:700;color:#e8e4d9">${i.product}</td>
-            <td style="color:#7eb8f7">${i.card || "—"}</td>
+            <td style="color:#7eb8f7;font-size:11px">${i.platform || "—"}${i.storeName ? ` · ${i.storeName}` : ""}</td>
             <td style="color:#ff7850">${fKz(i.totalCostKz)}</td>
             <td style="color:#50c878">${i.saleKz ? fKz(i.saleKz) : "—"}</td>
             <td style="color:${Number(i.profitKz || 0) >= 0 ? "#c9a84c" : "#ff5050"};font-weight:700">${i.profitKz ? fKz(i.profitKz) : "—"}</td>
             <td><span style="font-size:10px;padding:3px 8px;border-radius:2px;background:${STATUS_COLORS[i.status] || "#555"}22;color:${STATUS_COLORS[i.status] || "#555"}">${STATUS_LABELS[i.status] || i.status}</span></td>
-            <td><button class="btn-d" onclick="del('hub_imports','${i.id}')">✕</button></td>
-          </tr>`).join("")}
+            <td style="display:flex;gap:4px">
+              <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="openModal('import','${i.id}')">✎</button>
+              <button class="btn-d" onclick="del('hub_imports','${i.id}')">✕</button>
+            </td>
+          </tr>
+          <tr><td colspan="8" style="padding:4px 10px 10px;background:#0b0b14">
+            <div style="font-size:10px;color:#555;letter-spacing:1px;margin-bottom:4px">DETALHES</div>
+            <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:#888">
+              ${i.condition ? `<span>Estado do produto: <span style="color:#ccc">${i.condition}</span></span>` : ""}
+              ${i.purchaseType ? `<span>Tipo de compra: <span style="color:#ccc">${i.purchaseType}</span></span>` : ""}
+              ${daysToArrive !== null ? `<span>Compra → Chegada: <span style="color:#7eb8f7;font-weight:700">${daysToArrive} dia${daysToArrive === 1 ? "" : "s"}</span></span>` : ""}
+              ${daysToSell !== null ? `<span>Chegada → Venda: <span style="color:#c9a84c;font-weight:700">${daysToSell} dia${daysToSell === 1 ? "" : "s"}</span></span>` : ""}
+              ${daysTotal !== null ? `<span>Total (compra → venda): <span style="color:#50c878;font-weight:700">${daysTotal} dia${daysTotal === 1 ? "" : "s"}</span></span>` : ""}
+            </div>
+            ${(i.statusHistory || []).length > 0 ? `<div style="margin-top:6px">
+              ${i.statusHistory.map(h => `<span style="display:inline-block;margin:2px 8px 2px 0;font-size:11px;color:#666">${fDate(h.date)}: ${STATUS_LABELS[h.status] || h.status}</span>`).join("")}
+            </div>` : ""}
+          </td></tr>`;
+      }).join("")}
           </tbody>
         </table></div>`}
       </div>
 
       ${modal === "import" ? importModal() : ""}`;
     }
-
     function importModal() {
-      const calcCosts = () => {
-        const priceUSD = parseFloat(gv("price_usd") || 0);
-        const freightUS = parseFloat(gv("freight_us") || 0);
-        const freightAO = parseFloat(gv("freight_ao") || 0);
-        const rateUSDT = parseFloat(gv("rate_usdt_usd") || 1.01454545);
-        const rateKz = parseFloat(gv("rate_kz") || 1157);
-        const marketing = parseFloat(gv("marketing") || 0);
-        const packaging = parseFloat(gv("packaging") || 0);
-        const saleKz = parseFloat(gv("sale_kz") || 0);
-        const agt = priceUSD * 0.16; // 16% of product price only
-        const totalUSD = priceUSD + freightUS + freightAO + agt;
-        const totalUSDT = totalUSD * rateUSDT;
-        const totalKz = totalUSDT * rateKz + marketing + packaging;
-        const profit = saleKz - totalKz;
-        document.getElementById("calc-agt") && (document.getElementById("calc-agt").textContent = fUSD(agt));
-        document.getElementById("calc-total-usd") && (document.getElementById("calc-total-usd").textContent = fUSD(totalUSD));
-        document.getElementById("calc-total-kz") && (document.getElementById("calc-total-kz").textContent = fKz(totalKz));
-        document.getElementById("calc-profit") && (document.getElementById("calc-profit").textContent = fKz(profit));
-        document.getElementById("calc-profit") && (document.getElementById("calc-profit").style.color = profit >= 0 ? "#50c878" : "#ff5050");
-      };
+      const editing = modalState?.editId ? db.hub_imports.find(i => String(i.id) === String(modalState.editId)) : null;
 
       return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()" style="max-width:540px">
-      <div class="modal-title">NOVA ENCOMENDA — IMPORTAÇÃO</div>
+      <div class="modal-title">${editing ? "EDITAR ENCOMENDA" : "NOVA ENCOMENDA"} — IMPORTAÇÃO</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div class="field full"><label>Produto</label><input id="m-product" placeholder="ex: iPhone 14 Pro 256GB Space Black"/></div>
-        <div class="field"><label>Data do Pedido</label><input type="date" id="m-orderDate" value="${today()}"/></div>
+        <div class="field full"><label>Produto</label><input id="m-product" placeholder="ex: iPhone 14 Pro 256GB Space Black" value="${editing?.product || ""}"/></div>
+        <div class="field"><label>Data do Pedido</label><input type="date" id="m-orderDate" value="${editing?.orderDate || today()}"/></div>
         <div class="field"><label>Estado</label>
           <select id="m-status">
-            <option value="pedido">Pedido</option>
-            <option value="em_transito">Em Trânsito</option>
-            <option value="na_redirecionadora">Na Redirecionadora</option>
-            <option value="em_angola">Em Angola</option>
-            <option value="vendido">Vendido</option>
+            <option value="pedido" ${(!editing || editing.status === "pedido") ? "selected" : ""}>Pedido</option>
+            <option value="em_transito" ${editing?.status === "em_transito" ? "selected" : ""}>Em Trânsito</option>
+            <option value="na_redirecionadora" ${editing?.status === "na_redirecionadora" ? "selected" : ""}>Na Redirecionadora</option>
+            <option value="em_angola" ${editing?.status === "em_angola" ? "selected" : ""}>Em Angola</option>
+            <option value="vendido" ${editing?.status === "vendido" ? "selected" : ""}>Vendido</option>
+          </select>
+        </div>
+        <div class="field full"><label>Data desta Atualização de Estado</label><input type="date" id="m-statusDate" value="${today()}"/>
+          <div style="font-size:10px;color:#555;margin-top:4px">Só é usada se mudares o "Estado" acima — fica gravada no histórico para calcular os tempos.</div>
+        </div>
+
+        <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">ORIGEM DA COMPRA</div>
+
+        <div class="field"><label>Plataforma de Compra</label>
+          <input list="platform-options" id="m-platform" placeholder="ex: eBay" value="${editing?.platform || ""}"/>
+          <datalist id="platform-options">
+            ${[...new Set(db.hub_imports.map(i => i.platform).filter(Boolean))].map(p => `<option value="${p}"></option>`).join("")}
+            <option value="eBay"></option><option value="AliExpress"></option><option value="Amazon"></option><option value="Facebook Marketplace"></option>
+          </datalist>
+        </div>
+        <div class="field"><label>Nome da Loja</label>
+          <input list="store-options" id="m-storeName" placeholder="ex: TechDeals_US" value="${editing?.storeName || ""}"/>
+          <datalist id="store-options">
+            ${[...new Set(db.hub_imports.map(i => i.storeName).filter(Boolean))].map(s => `<option value="${s}"></option>`).join("")}
+          </datalist>
+        </div>
+        <div class="field"><label>Estado do Produto</label>
+          <select id="m-condition">
+            <option value="">— Seleccionar —</option>
+            <option value="Novo na Caixa" ${editing?.condition === "Novo na Caixa" ? "selected" : ""}>Novo na Caixa</option>
+            <option value="Usado" ${editing?.condition === "Usado" ? "selected" : ""}>Usado</option>
+            <option value="Apenas Peças" ${editing?.condition === "Apenas Peças" ? "selected" : ""}>Apenas Peças</option>
+          </select>
+        </div>
+        <div class="field"><label>Tipo de Compra</label>
+          <select id="m-purchaseType">
+            <option value="">— Seleccionar —</option>
+            <option value="Compre Agora" ${editing?.purchaseType === "Compre Agora" ? "selected" : ""}>Compre Agora</option>
+            <option value="Leilão" ${editing?.purchaseType === "Leilão" ? "selected" : ""}>Leilão</option>
           </select>
         </div>
 
        <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">CUSTOS</div>
 
-        <div class="field"><label>Preço no eBay (USD)</label><input type="number" id="m-price_usd" placeholder="ex: 280" oninput="calcImport()"/></div>
-        <div class="field"><label>Frete eBay → Redirecionadora (USD)</label><input type="number" id="m-freight_us" placeholder="0 se grátis" oninput="calcImport()"/></div>
-        <div class="field"><label>Frete Redirecionadora → Angola (USD)</label><input type="number" id="m-freight_ao" placeholder="ex: 17.41" oninput="calcImport()"/></div>
+        <div class="field"><label>Preço no eBay (USD)</label><input type="number" id="m-price_usd" placeholder="ex: 280" value="${editing?.priceUSD || ""}" oninput="calcImport()"/></div>
+        <div class="field"><label>Frete eBay → Redirecionadora (USD)</label><input type="number" id="m-freight_us" placeholder="0 se grátis" value="${editing?.freightUS || ""}" oninput="calcImport()"/></div>
+        <div class="field"><label>Frete Redirecionadora → Angola (USD)</label><input type="number" id="m-freight_ao" placeholder="ex: 17.41" value="${editing?.freightAO || ""}" oninput="calcImport()"/></div>
         <div class="field"><label>Taxa AGT (16% do produto) — calculada</label><div class="computed" id="calc-agt">$0.00</div></div>
-        <div class="field"><label>Taxa USDT/USD (spread Bybit)</label><input type="number" id="m-rate_usdt_usd" placeholder="1.01454545" value="1.01454545" step="0.00001" oninput="calcImport()"/></div>
-        <div class="field"><label>Taxa USDT/Kz</label><input type="number" id="m-rate_kz" placeholder="1157" value="1157" oninput="calcImport()"/></div>
-        <div class="field"><label>Tráfego Pago (Kz)</label><input type="number" id="m-marketing" placeholder="ex: 5000" oninput="calcImport()"/></div>
-        <div class="field"><label>Sacolas / Embalagem (Kz)</label><input type="number" id="m-packaging" placeholder="ex: 2000" oninput="calcImport()"/></div>
+        <div class="field"><label>Taxa USDT/USD (spread Bybit)</label><input type="number" id="m-rate_usdt_usd" placeholder="1.01454545" value="${editing?.rateUsdtUsd || "1.01454545"}" step="0.00001" oninput="calcImport()"/></div>
+        <div class="field"><label>Taxa USDT/Kz</label><input type="number" id="m-rate_kz" placeholder="1157" value="${editing?.rateKz || "1157"}" oninput="calcImport()"/></div>
+        <div class="field"><label>Tráfego Pago (Kz)</label><input type="number" id="m-marketing" placeholder="ex: 5000" value="${editing?.marketing || ""}" oninput="calcImport()"/></div>
+        <div class="field"><label>Sacolas / Embalagem (Kz)</label><input type="number" id="m-packaging" placeholder="ex: 2000" value="${editing?.packaging || ""}" oninput="calcImport()"/></div>
         <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">PAGAMENTO</div>
 
         <div class="field"><label>Cartão Usado no Pagamento</label>
-          <input list="card-options" id="m-card" placeholder="ex: BFA Visa Gold"/>
+          <input list="card-options" id="m-card" placeholder="ex: BFA Visa Gold" value="${editing?.card || ""}"/>
           <datalist id="card-options">
             ${[...new Set(db.hub_imports.map(i => i.card).filter(Boolean))].map(c => `<option value="${c}"></option>`).join("")}
           </datalist>
         </div>
           <div class="field"><label>Tipo de Cashback</label>
             <select id="m-cashback_type" onchange="calcImport()">
-              <option value="percentage">Percentagem (%)</option>
-              <option value="fixed">Valor Fixo (Kz)</option>
-              <option value="usdt">Valor Fixo (USDT)</option>
+              <option value="percentage" ${(!editing || editing.cashbackType === "percentage") ? "selected" : ""}>Percentagem (%)</option>
+              <option value="fixed" ${editing?.cashbackType === "fixed" ? "selected" : ""}>Valor Fixo (Kz)</option>
+              <option value="usdt" ${editing?.cashbackType === "usdt" ? "selected" : ""}>Valor Fixo (USDT)</option>
             </select>
           </div>
-          <div class="field"><label>Valor do Cashback</label><input type="number" id="m-cashback_value" placeholder="ex: 2" step="0.01" oninput="calcImport()"/></div>
+          <div class="field"><label>Valor do Cashback</label><input type="number" id="m-cashback_value" placeholder="ex: 2" step="0.01" value="${editing?.cashbackValue || ""}" oninput="calcImport()"/></div>
           <div class="field"><label>Cashback Aplicado</label><div class="computed" id="calc-cashback" style="color:#50c878">0,00 Kz</div></div>
 
           <div style="grid-column:1/-1;background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px;padding:12px">
@@ -682,9 +719,9 @@
           </div>
 
           <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px">VENDA</div>
-          <div class="field"><label>Preço de Venda (Kz)</label><input type="number" id="m-sale_kz" placeholder="ex: 470000" oninput="calcImport()"/></div>
+          <div class="field"><label>Preço de Venda (Kz)</label><input type="number" id="m-sale_kz" placeholder="ex: 470000" value="${editing?.saleKz || ""}" oninput="calcImport()"/></div>
           <div class="field"><label>Lucro Previsto</label><div class="computed" id="calc-profit" style="font-size:16px">0,00 Kz</div></div>
-          <div class="field full"><label>Notas</label><input id="m-notes" placeholder="Opcional..."/></div>
+          <div class="field full"><label>Notas</label><input id="m-notes" placeholder="Opcional..." value="${editing?.notes || ""}"/></div>
         </div>
         <div style="display:flex;gap:12px;margin-top:16px">
           <button class="btn-p" style="flex:1" onclick="saveImport()">GUARDAR</button>
@@ -729,13 +766,31 @@
       const product = document.getElementById("m-product")?.value?.trim();
       const orderDate = document.getElementById("m-orderDate")?.value;
       const status = document.getElementById("m-status")?.value;
+      const statusDate = document.getElementById("m-statusDate")?.value || today();
       const notes = document.getElementById("m-notes")?.value || "";
       const card = document.getElementById("m-card")?.value?.trim() || "";
+      const platform = document.getElementById("m-platform")?.value?.trim() || "";
+      const storeName = document.getElementById("m-storeName")?.value?.trim() || "";
+      const condition = document.getElementById("m-condition")?.value || "";
+      const purchaseType = document.getElementById("m-purchaseType")?.value || "";
       if (!product) return alert("Nome do produto obrigatório.");
       calcImport();
       const c = window._importCalc || {};
+
+      const editing = modalState?.editId ? db.hub_imports.find(i => String(i.id) === String(modalState.editId)) : null;
+      const id = modalState?.editId || uid();
+
+      let statusHistory;
+      if (!editing) {
+        statusHistory = [{ id: uid(), status, date: orderDate }];
+      } else if (status !== editing.status) {
+        statusHistory = [...(editing.statusHistory || []), { id: uid(), status, date: statusDate }];
+      } else {
+        statusHistory = editing.statusHistory || [];
+      }
+
       await saveDoc("hub_imports", {
-        id: uid(), product, orderDate, status, notes, card,
+        id, product, orderDate, status, notes, card, platform, storeName, condition, purchaseType, statusHistory,
         priceUSD: c.priceUSD, freightUS: c.freightUS, freightAO: c.freightAO,
         agtUSD: c.agt, totalUSD: c.totalUSD, totalCostKz: c.totalKz,
         saleKz: c.saleKz, profitKz: c.profit,
@@ -745,6 +800,16 @@
       });
       modal = null; render();
     };
+
+    // ── HELPERS DE TEMPO (IMPORTAÇÃO) ───────────────────────────────────
+    function daysBetween(d1, d2) {
+      if (!d1 || !d2) return null;
+      return Math.round((new Date(d2) - new Date(d1)) / (1000 * 60 * 60 * 24));
+    }
+    function importStatusDate(imp, status) {
+      const entry = [...(imp.statusHistory || [])].reverse().find(h => h.status === status);
+      return entry?.date || null;
+    }
 
     // ── CUSTÓDIA ───────────────────────────────────────────────────────
     function pageCustodia() {
@@ -1203,6 +1268,7 @@
       window.saveModal_taxi_in = window.saveModal_taxi_in || (() => { });
       window.saveModal_taxi_cost = window.saveModal_taxi_cost || (() => { });
       window.saveModal_custody = window.saveModal_custody || (() => { });
+      if (modal === "import") calcImport();
     }
 
     // Bind modal saves dynamically since they're closures in page functions
