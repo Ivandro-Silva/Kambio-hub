@@ -568,7 +568,6 @@
     };
 
     // ── SELL PAGE ──────────────────────────────────────────────────────
-    let sellLots = []; // [{uid, lotId, usdt}]
     let clientSearch = "";
     let sellAsset = "USDT";
 
@@ -581,11 +580,13 @@
       const accountVal = document.getElementById("s-account")?.value || "";
       const notesVal = document.getElementById("s-notes")?.value || "";
       const pendingVal = document.getElementById("s-pending")?.checked || false;
+
       let totalUsdt = 0, totalRevenue = 0, totalProfit = 0;
-      const breakdown = sellLots.map(entry => {
-        const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
-        if (!lot || !entry.usdt) return null;
-        const u = Number(entry.usdt);
+      const breakdown = availLots.map(lot => {
+        const chk = document.getElementById(`sl-chk-${lot.id}`);
+        if (!chk || !chk.checked) return null;
+        const u = parseFloat(document.getElementById(`sl-val-${lot.id}`)?.value) || 0;
+        if (!u) return null;
         const profit = u * (rate - Number(lot.rateKz));
         totalUsdt += u; totalRevenue += u * rate; totalProfit += profit;
         return { lot, u, profit };
@@ -627,38 +628,21 @@
               <label style="margin:0;text-transform:none;font-size:12px;color:#ccc">Pagamento Pendente — o stock é descontado agora, mas a conta só é creditada quando confirmares o pagamento no Hub</label>
             </div>
           </div>
-          </div>
 
           <div style="margin-top:16px">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-              <div style="font-size:11px;color:#c9a84c;letter-spacing:2px">LOTES A USAR</div>
-              <button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="addSellLot()">+ LOTE</button>
-            </div>
-            ${sellLots.length === 0 ? '<div style="font-size:12px;color:#444;padding:8px 0">Clica em "+ LOTE" para seleccionar o stock a vender.</div>' : ""}
-            <div id="sell-lots-wrap">
-              ${sellLots.map(entry => {
-        const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
-        const spread = lot && rate ? fKz((rate - Number(lot.rateKz)) * Number(entry.usdt || 0)) : "—";
-        const spreadColor = lot && rate && (rate - Number(lot.rateKz)) >= 0 ? "#50c878" : "#ff5050";
-        return `
-                <div class="lot-entry" id="le-${entry.uid}">
-                  <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
-                    <div><label>Lote</label>
-                      <select onchange="updateSellLot('${entry.uid}','lotId',this.value)">
-                        <option value="">— Seleccionar —</option>
-                        ${availLots.map(l => { const w = db.wallets.find(x => String(x.id) === String(l.walletId)); return `<option value="${l.id}" ${String(l.id) === String(entry.lotId) ? "selected" : ""}>${w?.name || "?"} · ${Number(l.rateKz).toLocaleString()} Kz · ${fAsset(l.remaining, sellAsset)} disp.</option>`; }).join("")}
-                      </select>
-                    </div>
-                    <div><label>Qtd ${sellAsset}${lot ? ` (max ${Number(lot.remaining).toFixed(2)})` : ""}                </label>
-                  <input type="number" id="sl-usdt-${entry.uid}" min="0" step="0.01" value="${entry.usdt || ""}" placeholder="ex: 200" oninput="updateSellLot('${entry.uid}','usdt',this.value)"/>
-                </div>                    <button class="btn-danger" onclick="removeSellLot('${entry.uid}')" style="align-self:flex-end">✕</button>
-                    </div>
-                    ${lot && entry.usdt && rate ? `<div style="margin-top:6px;font-size:11px;color:#666">
-                      Comprado a <span style="color:#c9a84c">${Number(lot.rateKz).toLocaleString()} Kz</span> · Spread: <span style="color:${spreadColor}">${spread}</span>
-                  </div>`: ""}
+            <div style="font-size:11px;color:#c9a84c;letter-spacing:2px;margin-bottom:10px">LOTES DISPONÍVEIS (marca os que vais usar nesta venda)</div>
+            <div id="sell-lots-wrap" style="display:flex;flex-direction:column;gap:6px;border:1px solid #1e1e30;border-radius:2px;padding:10px;max-height:340px;overflow-y:auto">
+              ${availLots.length === 0 ? '<div style="font-size:12px;color:#444">Sem stock disponível para este ativo.</div>' : availLots.map(l => {
+        const w = db.wallets.find(x => String(x.id) === String(l.walletId));
+        return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  <input type="checkbox" id="sl-chk-${l.id}" onchange="toggleSellLot('${l.id}')" style="width:auto"/>
+                  <span style="flex:1;font-size:12px;min-width:160px">${w?.name || "?"} · <span style="color:#c9a84c">${Number(l.rateKz).toLocaleString()} Kz</span> · <span style="color:#555">${fAsset(l.remaining, l.asset || "USDT")} disp.</span></span>
+                  <input type="text" inputmode="decimal" id="sl-val-${l.id}" placeholder="0" style="width:100px" disabled oninput="refreshSell()"/>
+                  <button type="button" class="btn-ghost" style="padding:6px 9px;font-size:10px" onclick="maxSellLot('${l.id}')">MÁX</button>
                 </div>`;
       }).join("")}
             </div>
+            <div style="font-size:11px;color:#555;margin-top:6px">Total selecionado: <span id="sl-total" style="color:#7eb8f7;font-weight:700">${totalUsdt.toFixed(4)}</span> ${sellAsset}</div>
           </div>
           <button class="btn-primary" style="width:100%;margin-top:14px" onclick="submitSell()">REGISTAR VENDA</button>
         </div>
@@ -693,24 +677,43 @@
       </div>`: ""}`;
     }
 
-    window.addSellLot = function () { sellLots.push({ uid: uid(), lotId: "", usdt: "" }); render(); };
-    window.removeSellLot = function (u) { sellLots = sellLots.filter(l => String(l.uid) !== String(u)); render(); };
-    window.updateSellLot = function (u, k, v) { sellLots = sellLots.map(l => String(l.uid) === String(u) ? { ...l, [k]: v } : l); render(); };
+    window.toggleSellLot = function (lotId) {
+      const chk = document.getElementById(`sl-chk-${lotId}`);
+      const val = document.getElementById(`sl-val-${lotId}`);
+      if (val) val.disabled = !chk.checked;
+      if (!chk.checked && val) val.value = "";
+      refreshSell();
+    };
+    window.maxSellLot = function (lotId) {
+      const lot = db.lots.find(l => String(l.id) === String(lotId));
+      if (!lot) return;
+      const chk = document.getElementById(`sl-chk-${lotId}`);
+      const val = document.getElementById(`sl-val-${lotId}`);
+      if (!chk || !val) return;
+      chk.checked = true;
+      val.disabled = false;
+      val.value = Number(lot.remaining).toFixed(4);
+      refreshSell();
+    };
     window.refreshSell = function () {
       const rate = parseFloat(document.getElementById("s-rate")?.value) || 0;
+      const availLots = db.lots.filter(l => Number(l.remaining || 0) > 0 && (l.asset || "USDT") === sellAsset);
       let totalUsdt = 0, totalRevenue = 0, totalProfit = 0;
-      const breakdown = sellLots.map(entry => {
-        const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
-        if (!lot || !entry.usdt) return null;
-        const u = Number(entry.usdt);
+      const breakdown = availLots.map(lot => {
+        const chk = document.getElementById(`sl-chk-${lot.id}`);
+        if (!chk || !chk.checked) return null;
+        const u = parseFloat(document.getElementById(`sl-val-${lot.id}`)?.value) || 0;
+        if (!u) return null;
         const profit = u * (rate - Number(lot.rateKz));
         totalUsdt += u; totalRevenue += u * rate; totalProfit += profit;
         return { lot, u, profit };
       }).filter(Boolean);
       const wrap = document.getElementById("sell-summary-wrap");
       if (wrap) wrap.innerHTML = buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown);
+      const totalEl = document.getElementById("sl-total");
+      if (totalEl) totalEl.textContent = totalUsdt.toFixed(4);
     };
-    window.onSellAssetChange = function (v) { sellAsset = v; sellLots = []; render(); };
+    window.onSellAssetChange = function (v) { sellAsset = v; render(); };
 
     window.submitSell = async function () {
       const date = document.getElementById("s-date")?.value;
@@ -721,8 +724,13 @@
       const notes = document.getElementById("s-notes")?.value || "";
       const pending = document.getElementById("s-pending")?.checked || false;
 
+      const availLots = db.lots.filter(l => Number(l.remaining || 0) > 0 && (l.asset || "USDT") === sellAsset);
+      const sellLots = availLots
+        .map(lot => ({ lotId: lot.id, usdt: parseFloat(document.getElementById(`sl-val-${lot.id}`)?.value) || 0, checked: document.getElementById(`sl-chk-${lot.id}`)?.checked }))
+        .filter(e => e.checked && e.usdt > 0);
+
       if (!rateKz || !accountId) return alert("Câmbio de venda e conta de recebimento são obrigatórios.");
-      if (!sellLots.length || sellLots.some(l => !l.lotId || !l.usdt)) return alert("Adiciona pelo menos um lote com quantidade.");
+      if (!sellLots.length) return alert("Marca pelo menos um lote e indica a quantidade.");
 
       for (const entry of sellLots) {
         const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
@@ -1134,63 +1142,67 @@
       const fromWallet = db.wallets.find(w => String(w.id) === String(fromId));
       const asset = fromWallet?.asset || "USDT";
       const availLots = fromId ? walletStock(fromId) : [];
+      const dateVal = document.getElementById("tr-date")?.value || today();
+      const toVal = document.getElementById("tr-to")?.value || "";
+      const feeVal = document.getElementById("tr-fee")?.value ?? "0";
+      const notesVal = document.getElementById("tr-notes")?.value || "";
 
       return `
-  <div class="grid2">
-    <div class="card">
-      <div class="sec-title">Transferir Entre Carteiras</div>
-      <div class="form-grid">
-        <div class="field"><label>Data *</label><input type="date" id="tr-date" value="${today()}"/></div>
-        <div class="field"><label>Carteira de Origem *</label>
-          <select id="tr-from" onchange="onTransferFromChange()">
-            <option value="">— Seleccionar —</option>
-            ${db.wallets.map(w => `<option value="${w.id}" ${String(w.id) === String(fromId) ? "selected" : ""}>${w.name} · ${w.asset || "USDT"} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
-          </select>
-        </div>
-        <div class="field"><label>Carteira de Destino *</label>
-          <select id="tr-to">
-            <option value="">— Seleccionar —</option>
-            ${db.wallets.filter(w => String(w.id) !== String(fromId) && (w.asset || "USDT") === asset).map(w => `<option value="${w.id}">${w.name} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
-          </select>
-        </div>
-        <div class="field"><label>Taxa da Transação (${asset}, opcional, aplicada ao total)</label><input type="number" id="tr-fee" placeholder="ex: 1" step="0.0001" value="0" oninput="renderTransfersLots()"/></div>
-        <div class="field full"><label>Notas</label><input type="text" id="tr-notes" placeholder="Opcional..."/></div>
-      </div>
+      <div class="grid2">
+        <div class="card">
+          <div class="sec-title">Transferir Entre Carteiras</div>
+          <div class="form-grid">
+            <div class="field"><label>Data *</label><input type="date" id="tr-date" value="${dateVal}"/></div>
+            <div class="field"><label>Carteira de Origem *</label>
+              <select id="tr-from" onchange="onTransferFromChange()">
+                <option value="">— Seleccionar —</option>
+                ${db.wallets.map(w => `<option value="${w.id}" ${String(w.id) === String(fromId) ? "selected" : ""}>${w.name} · ${w.asset || "USDT"} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label>Carteira de Destino *</label>
+              <select id="tr-to">
+                <option value="">— Seleccionar —</option>
+                ${db.wallets.filter(w => String(w.id) !== String(fromId) && (w.asset || "USDT") === asset).map(w => `<option value="${w.id}" ${String(w.id) === String(toVal) ? "selected" : ""}>${w.name} (${fAsset(walletBalance(w.id), w.asset || "USDT")})</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label>Taxa da Transação (${asset}, opcional, aplicada ao total)</label><input type="text" inputmode="decimal" id="tr-fee" placeholder="ex: 1" value="${feeVal}" oninput="renderTransfersLots()"/></div>
+            <div class="field full"><label>Notas</label><input type="text" id="tr-notes" placeholder="Opcional..." value="${notesVal}"/></div>          
+          </div>
 
-      <div style="margin-top:16px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div style="font-size:11px;color:#c9a84c;letter-spacing:2px">LOTES A TRANSFERIR</div>
-          <button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="addTransferLot()" ${!fromId ? "disabled" : ""}>+ LOTE</button>
+          <div style="margin-top:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <div style="font-size:11px;color:#c9a84c;letter-spacing:2px">LOTES A TRANSFERIR</div>
+              <button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="addTransferLot()" ${!fromId ? "disabled" : ""}>+ LOTE</button>
+            </div>
+            ${!fromId ? '<div style="font-size:12px;color:#444;padding:8px 0">Escolhe primeiro a carteira de origem.</div>' : ""}
+            ${fromId && transferLots.length === 0 ? '<div style="font-size:12px;color:#444;padding:8px 0">Clica em "+ LOTE" para escolher o stock a transferir.</div>' : ""}
+            <div id="transfer-lots-wrap">${buildTransferLotsHtml(availLots)}</div>
+          </div>
+          <button class="btn-primary" style="width:100%;margin-top:14px" onclick="submitTransfer()">REGISTAR TRANSFERÊNCIA</button>
         </div>
-        ${!fromId ? '<div style="font-size:12px;color:#444;padding:8px 0">Escolhe primeiro a carteira de origem.</div>' : ""}
-        ${fromId && transferLots.length === 0 ? '<div style="font-size:12px;color:#444;padding:8px 0">Clica em "+ LOTE" para escolher o stock a transferir.</div>' : ""}
-        <div id="transfer-lots-wrap">${buildTransferLotsHtml(availLots)}</div>
-      </div>
-      <button class="btn-primary" style="width:100%;margin-top:14px" onclick="submitTransfer()">REGISTAR TRANSFERÊNCIA</button>
-    </div>
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div class="sec-title" style="margin:0">Histórico de Transferências</div>
-        <button class="btn-danger" onclick="resetCollection('transfers','Transferências')" style="font-size:10px">🗑</button>
-      </div>
-      ${history.length === 0 ? '<div class="empty">SEM TRANSFERÊNCIAS</div>' : `
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>Data</th><th>De</th><th>Para</th><th>Qtd Enviada</th><th>Taxa</th><th>Recebido</th></tr></thead>
-        <tbody>${history.map(t => {
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div class="sec-title" style="margin:0">Histórico de Transferências</div>
+            <button class="btn-danger" onclick="resetCollection('transfers','Transferências')" style="font-size:10px">🗑</button>
+          </div>
+          ${history.length === 0 ? '<div class="empty">SEM TRANSFERÊNCIAS</div>' : `
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Data</th><th>De</th><th>Para</th><th>Qtd Enviada</th><th>Taxa</th><th>Recebido</th></tr></thead>
+            <tbody>${history.map(t => {
         const wf = db.wallets.find(w => String(w.id) === String(t.fromId));
         const wt = db.wallets.find(w => String(w.id) === String(t.toId));
         return `<tr>
-            <td>${fDate(t.date)}</td>
-            <td style="color:#777">${wf?.name || "—"}</td>
-            <td style="color:#777">${wt?.name || "—"}</td>
-            <td style="color:#7eb8f7">${fAsset(t.amount, t.asset)}</td>
-            <td style="color:#ff7850">${fAsset(t.fee, t.asset)}</td>
-            <td style="color:#50c878">${fAsset(t.received, t.asset)}</td>
-          </tr>`;
+                <td>${fDate(t.date)}</td>
+                <td style="color:#777">${wf?.name || "—"}</td>
+                <td style="color:#777">${wt?.name || "—"}</td>
+                <td style="color:#7eb8f7">${fAsset(t.amount, t.asset)}</td>
+                <td style="color:#ff7850">${fAsset(t.fee, t.asset)}</td>
+                <td style="color:#50c878">${fAsset(t.received, t.asset)}</td>
+              </tr>`;
       }).join("")}</tbody>
-      </table></div>`}
-    </div>
-  </div>`;
+          </table></div>`}
+        </div>
+      </div>`;
     }
 
     function buildTransferLotsHtml(availLots) {
@@ -1207,7 +1219,7 @@
           </select>
         </div>
         <div><label>Qtd${lot ? ` (max ${Number(lot.remaining).toFixed(4)})` : ""}</label>
-          <input type="number" id="tl-qty-${entry.uid}" min="0" step="0.0001" value="${entry.qty || ""}" placeholder="ex: 100" oninput="updateTransferLot('${entry.uid}','qty',this.value)"/>
+          <input type="text" inputmode="decimal" id="tl-qty-${entry.uid}" value="${entry.qty || ""}" placeholder="ex: 100" oninput="updateTransferLot('${entry.uid}','qty',this.value)"/>
         </div>
         <button class="btn-danger" onclick="removeTransferLot('${entry.uid}')">✕</button>
       </div>
