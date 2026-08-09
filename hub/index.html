@@ -23,10 +23,10 @@
     };
 
     // ── COLLECTIONS ────────────────────────────────────────────────────
-    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "sales", "lots", "wallets", "accounts", "hub_notes"];
+    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "sales", "lots", "wallets", "accounts", "hub_notes", "clients"];
 
     let app, db_fire, auth, currentUser = null;
-    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [] };
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [] };
 
     // ── FIREBASE INIT ──────────────────────────────────────────────────
     async function initAppAndAuth() {
@@ -711,7 +711,7 @@
       const totalKzBruto = totalUSDT * rateKz + marketing + packaging;
       const cashbackKz = cashbackType === "percentage" ? totalKzBruto * (cashbackInput / 100)
         : cashbackType === "usdt" ? cashbackInput * rateKz
-        : cashbackInput;
+          : cashbackInput;
       const totalKz = totalKzBruto - cashbackKz;
       const profit = saleKz - totalKz;
 
@@ -854,30 +854,49 @@
     }
     window.onLoanAssetChange = function (v) { window._loanAsset = v; render(); };
 
+    function pendingSaleAmount(s) { return Number(s.totalRevenue || 0); }
+
     function pageEmprestimos() {
       const loans = [...db.hub_loans].sort((a, b) => new Date(b.date) - new Date(a.date)); const active = loans.filter(l => !l.returned);
       const returned = loans.filter(l => l.returned);
-      const totalActive = active.reduce((s, l) => s + Number(l.amount || 0), 0);
+      const pendingSales = db.sales.filter(s => s.pendingPayment && !s.pendingPaid).sort((a, b) => new Date(b.date) - new Date(a.date));
+      const totalActive = active.reduce((s, l) => s + Number(l.amount || 0), 0) + pendingSales.reduce((s, x) => s + pendingSaleAmount(x), 0);
       const now = new Date();
       const overdue = active.filter(l => l.dueDate && new Date(l.dueDate) < now);
 
       return `
       <div class="grid4" style="margin-bottom:20px">
-        ${sc("Emprestado (activo)", fKz(totalActive), "#ff7850", "💵")}
+        ${sc("Emprestado + Pendente", fKz(totalActive), "#ff7850", "💵")}
         ${sc("Nº de Empréstimos", active.length, "#7eb8f7", "◉")}
+        ${sc("Vendas Pendentes", pendingSales.length, pendingSales.length > 0 ? "#ff7850" : "#50c878", "🕒")}
         ${sc("Em Atraso", overdue.length, overdue.length > 0 ? "#ff5050" : "#50c878", "⚠")}
-        ${sc("Já Devolvido", fKz(returned.reduce((s, l) => s + Number(l.amount || 0), 0)), "#50c878", "✓")}
       </div>
 
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-          <div class="sec-title" style="margin:0">Dinheiro Emprestado</div>
+          <div class="sec-title" style="margin:0">Dinheiro Emprestado & Vendas Pendentes</div>
           <button class="btn-p" onclick="openModal('loan')">+ NOVO EMPRÉSTIMO</button>
         </div>
-        ${active.length === 0 ? empty("Sem empréstimos activos") : `
+        ${active.length === 0 && pendingSales.length === 0 ? empty("Sem empréstimos ou vendas pendentes") : `
         <table class="tbl">
           <thead><tr><th>Pessoa</th><th>Total</th><th>Pago</th><th>Restante</th><th>Prazo</th><th>Estado</th><th></th></tr></thead>
-          <tbody>${active.map(l => {
+          <tbody>
+          ${pendingSales.map(s => {
+        const client = db.clients.find(c => String(c.id) === String(s.clientId));
+        const amount = pendingSaleAmount(s);
+        return `<tr style="border-left:3px solid #ff7850">
+              <td style="font-weight:700;color:#e8e4d9">${client?.name || "Cliente não identificado"} <span class="cat-badge red" style="margin-left:4px">VENDA PENDENTE</span></td>
+              <td style="color:#ff7850">${fKz(amount)}</td>
+              <td style="color:#555">—</td>
+              <td style="font-weight:700;color:#c9a84c">${fKz(amount)}</td>
+              <td style="color:#777">—</td>
+              <td><span class="cat-badge red">POR CONFIRMAR</span></td>
+              <td style="display:flex;gap:4px;flex-wrap:wrap">
+                <button class="btn-ghost" style="padding:4px 9px;font-size:11px;color:#50c878;border-color:#50c87844" onclick="openModal('sale-payment','${s.id}')">💰 Confirmar</button>
+              </td>
+            </tr>`;
+      }).join("")}
+          ${active.map(l => {
         const isOverdue = l.dueDate && new Date(l.dueDate) < now;
         const paid = loanPaid(l), remaining = loanRemaining(l);
         const loanAsset = l.asset || "Kz";
@@ -928,6 +947,27 @@
         <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
       </div>
     </div></div>`;
+        })() : ""}
+
+  ${modal === "sale-payment" ? (() => {
+          const sale = db.sales.find(s => String(s.id) === String(modalState?.editId));
+          if (!sale) return "";
+          const client = db.clients.find(c => String(c.id) === String(sale.clientId));
+          return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-title">CONFIRMAR PAGAMENTO — ${client?.name || "Cliente"}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:16px">Valor da venda: <span style="color:#c9a84c;font-weight:700">${fKz(pendingSaleAmount(sale))}</span></div>
+      <div class="field" style="margin-bottom:12px"><label>Data do Recebimento</label><input type="date" id="sp-date" value="${today()}"/></div>
+      <div class="field" style="margin-bottom:20px"><label>Conta que Recebeu</label>
+        <select id="sp-account">
+          <option value="">— Seleccionar —</option>
+          ${db.accounts.map(a => `<option value="${a.id}" ${String(sale.accountId) === String(a.id) ? "selected" : ""}>${a.name} (${fKz(a.balance)})</option>`).join("")}
+        </select>
+      </div>
+      <div style="display:flex;gap:12px">
+        <button class="btn-p" style="flex:1" onclick="saveSalePayment('${sale.id}')">CONFIRMAR</button>
+        <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+      </div>
+    </div></div>`;
         })() : ""}`;
     }
 
@@ -948,6 +988,18 @@
       if (!confirm("Marcar como devolvido?")) return;
       const item = db.hub_loans.find(x => x.id === id);
       if (item) await saveDoc("hub_loans", { ...item, returned: true });
+    };
+
+    window.saveSalePayment = async function (saleId) {
+      const accountId = document.getElementById("sp-account")?.value;
+      if (!accountId) return alert("Escolhe a conta que recebeu o pagamento.");
+      const sale = db.sales.find(s => String(s.id) === String(saleId));
+      if (!sale) return;
+      const account = db.accounts.find(a => String(a.id) === String(accountId));
+      if (!account) return;
+      await saveDoc("accounts", { ...account, balance: Number(account.balance) + pendingSaleAmount(sale) });
+      await saveDoc("sales", { ...sale, pendingPaid: true, accountId: String(accountId) });
+      modal = null; render();
     };
 
     window.saveModal_loan = async function () {

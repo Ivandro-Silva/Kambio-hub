@@ -354,7 +354,7 @@
       ${recent.length === 0 ? '<div class="empty">SEM VENDAS</div>' : `
       <table class="tbl"><thead><tr><th>Data</th><th>USDT</th><th>Câmbio</th><th>Lucro</th></tr></thead><tbody>
       ${recent.map(s => `<tr>
-        <td>${fDate(s.date)}</td>
+        <td>${fDate(s.date)}${s.pendingPayment && !s.pendingPaid ? ' <span style="font-size:9px;color:#ff7850;border:1px solid #ff785044;padding:1px 5px;border-radius:2px">PENDENTE</span>' : ""}</td>
         <td style="color:#7eb8f7">${fU(s.totalUsdt)}</td>
         <td style="color:#c9a84c">${Number(s.rateKz).toLocaleString()} Kz</td>
         <td style="color:${Number(s.totalProfit) >= 0 ? "#50c878" : "#ff5050"};font-weight:700">${fKz(s.totalProfit)}</td>
@@ -575,6 +575,12 @@
     function pageSell() {
       const availLots = db.lots.filter(l => Number(l.remaining || 0) > 0 && (l.asset || "USDT") === sellAsset).sort((a, b) => new Date(a.date) - new Date(b.date));
       const rate = parseFloat(document.getElementById("s-rate")?.value) || 0;
+      const dateVal = document.getElementById("s-date")?.value || today();
+      const clientVal = document.getElementById("s-client")?.value || "";
+      const affVal = document.getElementById("s-aff")?.value || "";
+      const accountVal = document.getElementById("s-account")?.value || "";
+      const notesVal = document.getElementById("s-notes")?.value || "";
+      const pendingVal = document.getElementById("s-pending")?.checked || false;
       let totalUsdt = 0, totalRevenue = 0, totalProfit = 0;
       const breakdown = sellLots.map(entry => {
         const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
@@ -590,7 +596,7 @@
         <div class="card">
           <div class="sec-title">Registar Venda de USDT</div>
           <div class="form-grid">
-            <div class="field"><label>Data *</label><input type="date" id="s-date" value="${today()}"/></div>
+            <div class="field"><label>Data *</label><input type="date" id="s-date" value="${dateVal}"/></div>
             <div class="field"><label>Ativo a Vender *</label>
               <select id="s-asset" onchange="onSellAssetChange(this.value)">
                 ${[...new Set(db.lots.map(l => l.asset || "USDT"))].map(a => `<option value="${a}" ${a === sellAsset ? "selected" : ""}>${a}</option>`).join("") || `<option value="USDT">USDT</option>`}
@@ -600,22 +606,27 @@
             <div class="field"><label>Cliente</label>
               <select id="s-client" onchange="document.getElementById('s-aff').value=''">
                 <option value="">— Seleccionar —</option>
-                ${db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}
+                ${db.clients.map(c => `<option value="${c.id}" ${String(c.id) === String(clientVal) ? "selected" : ""}>${c.name}</option>`).join("")}
               </select>
             </div>
             <div class="field"><label>Afiliado</label>
               <select id="s-aff" onchange="document.getElementById('s-client').value=''">
                 <option value="">— Seleccionar —</option>
-                ${db.affiliates.map(a => `<option value="${a.id}">${a.name}</option>`).join("")}
+                ${db.affiliates.map(a => `<option value="${a.id}" ${String(a.id) === String(affVal) ? "selected" : ""}>${a.name}</option>`).join("")}
               </select>
             </div>
             <div class="field"><label>Conta de Recebimento (Kz) *</label>
               <select id="s-account">
                 <option value="">— Seleccionar —</option>
-                ${db.accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join("")}
+                ${db.accounts.map(a => `<option value="${a.id}" ${String(a.id) === String(accountVal) ? "selected" : ""}>${a.name}</option>`).join("")}
               </select>
             </div>
-            <div class="field"><label>Notas</label><input type="text" id="s-notes" placeholder="Opcional..."/></div>
+            <div class="field"><label>Notas</label><input type="text" id="s-notes" placeholder="Opcional..." value="${notesVal}"/></div>
+            <div class="field full" style="flex-direction:row;align-items:center;gap:8px">
+              <input type="checkbox" id="s-pending" style="width:auto" ${pendingVal ? "checked" : ""}/>
+              <label style="margin:0;text-transform:none;font-size:12px;color:#ccc">Pagamento Pendente — o stock é descontado agora, mas a conta só é creditada quando confirmares o pagamento no Hub</label>
+            </div>
+          </div>
           </div>
 
           <div style="margin-top:16px">
@@ -635,7 +646,7 @@
                     <div><label>Lote</label>
                       <select onchange="updateSellLot('${entry.uid}','lotId',this.value)">
                         <option value="">— Seleccionar —</option>
-                        ${availLots.map(l => `<option value="${l.id}" ${String(l.id) === String(entry.lotId) ? "selected" : ""}>${l.supplierName} · ${Number(l.rateKz).toLocaleString()} Kz · ${fAsset(l.remaining, sellAsset)} disp.</option>`).join("")}
+                        ${availLots.map(l => { const w = db.wallets.find(x => String(x.id) === String(l.walletId)); return `<option value="${l.id}" ${String(l.id) === String(entry.lotId) ? "selected" : ""}>${w?.name || "?"} · ${Number(l.rateKz).toLocaleString()} Kz · ${fAsset(l.remaining, sellAsset)} disp.</option>`; }).join("")}
                       </select>
                     </div>
                     <div><label>Qtd ${sellAsset}${lot ? ` (max ${Number(lot.remaining).toFixed(2)})` : ""}                </label>
@@ -708,6 +719,7 @@
       const affId = document.getElementById("s-aff")?.value || null;
       const accountId = document.getElementById("s-account")?.value;
       const notes = document.getElementById("s-notes")?.value || "";
+      const pending = document.getElementById("s-pending")?.checked || false;
 
       if (!rateKz || !accountId) return alert("Câmbio de venda e conta de recebimento são obrigatórios.");
       if (!sellLots.length || sellLots.some(l => !l.lotId || !l.usdt)) return alert("Adiciona pelo menos um lote com quantidade.");
@@ -730,11 +742,12 @@
         clientId: clientId || null, affiliateId: affId || null,
         rateKz, totalUsdt, totalRevenue, totalProfit, lotEntries, asset: sellAsset,
         accountId: String(accountId), notes,
+        pendingPayment: pending, pendingPaid: false,
       };
 
       const updates = [{ col: "sales", item: sale }];
 
-      // deduct lots and wallets
+      // deduct lots and wallets (acontece sempre, mesmo com pagamento pendente)
       for (const entry of sellLots) {
         const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
         const newRem = Math.max(0, Number(lot.remaining) - Number(entry.usdt));
@@ -743,9 +756,11 @@
         if (wallet) updates.push({ col: "wallets", item: { ...wallet, balance: Math.max(0, Number(wallet.balance) - Number(entry.usdt)) } });
       }
 
-      // credit account
-      const account = db.accounts.find(a => String(a.id) === String(accountId));
-      updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance) + totalRevenue } });
+      // credit account — só se o pagamento NÃO for pendente
+      if (!pending) {
+        const account = db.accounts.find(a => String(a.id) === String(accountId));
+        updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance) + totalRevenue } });
+      }
 
       await bulkSave(updates);
       sellLots = [];
@@ -816,7 +831,8 @@
     <input id="client-search" placeholder="🔍 Pesquisar por nome, telefone, grupo, quem adicionou ou carteira..." value="${clientSearch}" oninput="searchClients(this.value)"/>
   </div>
   <div id="client-table-wrap">${buildClientsTable()}</div>
-  ${buildClientModal()}`;
+  ${buildClientModal()}
+  ${buildClientViewModal()}`;
     }
 
     function buildClientsTable() {
@@ -835,7 +851,7 @@
         const prf = ss.reduce((a, s) => a + Number(s.totalProfit || 0), 0);
         return `<tr>
           <td style="color:#555">${idx + 1}</td>
-          <td style="font-weight:700;color:#e8e4d9">${c.name}</td>
+          <td style="font-weight:700;color:#e8e4d9;cursor:pointer;text-decoration:underline;text-decoration-style:dotted" onclick="openModal('view-client','${c.id}')">${c.name}</td>
           <td style="color:#777">${c.phone || "—"}</td>
           <td style="color:#7eb8f7">${c.groupName || "—"}</td>
           <td style="color:#777">${c.addedBy || "—"}</td>
@@ -862,6 +878,37 @@
     window.openModal = function (t, editId = null) { modalState = { type: t, editId }; render(); };
     window.closeModal = function () { modalState = null; render(); };
 
+    function buildClientViewModal() {
+      if (modalState?.type !== "view-client") return "";
+      const c = db.clients.find(x => String(x.id) === String(modalState.editId));
+      if (!c) return "";
+      const ss = db.sales.filter(s => String(s.clientId) === String(c.id)).sort((a, b) => new Date(b.date) - new Date(a.date));
+      const vol = ss.reduce((a, s) => a + Number(s.totalUsdt || 0), 0);
+      const prf = ss.reduce((a, s) => a + Number(s.totalProfit || 0), 0);
+      const prefWallet = db.wallets.find(w => String(w.id) === String(c.preferredWalletId));
+      return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-title">${c.name}</div>
+        <div class="row"><span>Telefone / WhatsApp</span><span>${c.phone || "—"}</span></div>
+        <div class="row"><span>Nome do Grupo</span><span style="color:#7eb8f7">${c.groupName || "—"}</span></div>
+        <div class="row"><span>Quem Adicionou</span><span>${c.addedBy || "—"}</span></div>
+        <div class="row"><span>Carteira Preferida</span><span style="color:#c084fc">${prefWallet ? `${prefWallet.name} (${prefWallet.asset || "USDT"})` : "—"}</span></div>
+        <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+          <div class="row"><span>Nº de Compras</span><span style="color:#c9a84c">${ss.length}</span></div>
+          <div class="row"><span>Volume Total</span><span style="color:#7eb8f7;font-weight:700">${fU(vol)}</span></div>
+          <div class="row bold"><span>Lucro Gerado</span><span style="color:${prf >= 0 ? "#50c878" : "#ff5050"}">${fKz(prf)}</span></div>
+        </div>
+        <div style="margin-top:10px">
+          <div style="font-size:10px;color:#555;letter-spacing:1.5px;margin-bottom:6px;text-transform:uppercase">Carteiras Registadas</div>
+          ${(c.walletIds || []).length === 0 ? '<div style="font-size:11px;color:#444">Nenhuma registada</div>' : `<div style="font-size:11px;color:#888;word-break:break-all">${(c.walletIds || []).join("<br>")}</div>`}
+        </div>
+        ${c.notes ? `<div style="margin-top:10px"><div style="font-size:10px;color:#555;letter-spacing:1.5px;margin-bottom:6px;text-transform:uppercase">Notas</div><div style="font-size:12px;color:#aaa">${c.notes}</div></div>` : ""}
+        <div style="display:flex;gap:12px;margin-top:20px">
+          <button class="btn-primary" style="flex:1" onclick="openModal('new-client','${c.id}')">✎ EDITAR</button>
+          <button class="btn-ghost" onclick="closeModal()">FECHAR</button>
+        </div>
+      </div></div>`;
+    }
+
     function buildClientModal() {
       if (modalState?.type !== "new-client") return "";
       const editing = modalState.editId ? db.clients.find(c => String(c.id) === String(modalState.editId)) : null;
@@ -871,6 +918,12 @@
         <div class="field" style="margin-bottom:12px"><label>Telefone / WhatsApp</label><input id="nc-phone" placeholder="+244 9XX XXX XXX" value="${editing?.phone || ""}"/></div>
         <div class="field" style="margin-bottom:12px"><label>Nome do Grupo</label><input id="nc-group" placeholder="ex: Grupo VIP Luanda" value="${editing?.groupName || ""}"/></div>
         <div class="field" style="margin-bottom:12px"><label>Quem Adicionou ao Grupo</label><input id="nc-addedby" placeholder="ex: Ivandro / Nome do Afiliado" value="${editing?.addedBy || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>Carteira Preferida (para receber pagamentos)</label>
+          <select id="nc-prefwallet">
+            <option value="">— Nenhuma —</option>
+            ${db.wallets.map(w => `<option value="${w.id}" ${String(w.id) === String(editing?.preferredWalletId) ? "selected" : ""}>${w.name} (${w.asset || "USDT"})</option>`).join("")}
+          </select>
+        </div>
         <div class="field" style="margin-bottom:12px"><label>IDs/Endereços das Carteiras (uma por linha)</label><textarea id="nc-wallets" rows="3" style="resize:vertical" placeholder="ex: TXk3...abc&#10;0xAb12...">${(editing?.walletIds || []).join("\n")}</textarea></div>
         <div class="field" style="margin-bottom:20px"><label>Notas</label><textarea id="nc-notes" rows="3" style="resize:vertical">${editing?.notes || ""}</textarea></div>
         <div style="display:flex;gap:12px">
@@ -890,6 +943,7 @@
         phone: document.getElementById("nc-phone")?.value || "",
         groupName: document.getElementById("nc-group")?.value || "",
         addedBy: document.getElementById("nc-addedby")?.value || "",
+        preferredWalletId: document.getElementById("nc-prefwallet")?.value || "",
         walletIds,
         notes: document.getElementById("nc-notes")?.value || ""
       });
@@ -1296,7 +1350,7 @@
             <thead><tr><th>#</th><th>Data</th><th>USDT</th><th>Câmbio</th><th>Receita</th><th>Lucro</th></tr></thead>
             <tbody>${[...sales].sort((a, b) => new Date(a.createdAt || a.date) - new Date(b.createdAt || b.date)).map((s, idx) => `<tr>
               <td style="color:#555">${idx + 1}</td>
-              <td>${fDate(s.date)}</td>
+              <td>${fDate(s.date)}${s.pendingPayment && !s.pendingPaid ? ' <span style="font-size:9px;color:#ff7850;border:1px solid #ff785044;padding:1px 5px;border-radius:2px">PENDENTE</span>' : ""}</td>
               <td style="color:#7eb8f7">${fU(s.totalUsdt)}</td>
               <td style="color:#c9a84c">${Number(s.rateKz).toLocaleString()} Kz</td>
               <td>${fKz(s.totalRevenue)}</td>
