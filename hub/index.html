@@ -8,7 +8,7 @@
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, enableIndexedDbPersistence }
+    import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, setDoc, deleteDoc, onSnapshot }
       from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
     import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut }
       from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -40,8 +40,9 @@
 
     async function initFirebase() {
       try {
-        db_fire = getFirestore(app);
-        await enableIndexedDbPersistence(db_fire).catch(() => { });
+        db_fire = initializeFirestore(app, {
+          localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+        });
         setStatus("connecting");
         COLS.forEach(col => {
           onSnapshot(collection(db_fire, col), snap => {
@@ -858,9 +859,11 @@
     }
 
     // ── CUSTÓDIA ───────────────────────────────────────────────────────
+    function custodyWithdrawn(item) { return (item.withdrawals || []).reduce((s, w) => s + Number(w.amount || 0), 0); }
+    function custodyRemaining(item) { return Number(item.amount || 0) - custodyWithdrawn(item); }
+
     function pageCustodia() {
-      const active = db.hub_custody.filter(x => !x.returned);
-      const returned = db.hub_custody.filter(x => x.returned);
+      const active = db.hub_custody.filter(x => !x.returned); const returned = db.hub_custody.filter(x => x.returned);
       const totalAtivo = active.reduce((s, x) => s + Number(x.amount || 0), 0);
 
       return `
@@ -883,19 +886,28 @@
         </div>
         ${active.length === 0 ? empty("Nenhum depósito em custódia activo.") : `
         <div style="overflow-x:auto"><table class="tbl">
-          <thead><tr><th>Pessoa</th><th>Valor</th><th>Data Entrada</th><th>Conta</th><th>Utilizado no Negócio</th><th>Notas</th><th></th></tr></thead>
-          <tbody>${active.map(x => `<tr>
+          <thead><tr><th>Pessoa</th><th>Total</th><th>Devolvido</th><th>Restante</th><th>Data</th><th>Conta</th><th>Notas</th><th></th></tr></thead>
+          <tbody>${active.map(x => {
+        const withdrawn = custodyWithdrawn(x), remaining = custodyRemaining(x);
+        return `<tr>
             <td style="font-weight:700;color:#e8e4d9">${x.person}</td>
-            <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
+            <td style="color:#ff7850">${fKz(x.amount)}</td>
+            <td style="color:#50c878">${fKz(withdrawn)}</td>
+            <td style="font-weight:700;color:${remaining <= 0 ? "#50c878" : "#c9a84c"}">${fKz(remaining)}</td>
             <td>${fDate(x.date)}</td>
             <td style="color:#777">${x.account || "—"}</td>
-            <td>${x.usedInBusiness ? `<span style="color:#c9a84c">Sim — ${fKz(x.usedAmount || 0)}</span>` : '<span style="color:#555">Não</span>'}</td>
             <td style="color:#555;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.notes || "—"}</td>
-            <td style="display:flex;gap:4px">
+            <td style="display:flex;gap:4px;flex-wrap:wrap">
+              <button class="btn-ghost" style="padding:4px 9px;font-size:11px;color:#ff7850;border-color:#ff785044" onclick="openModal('custody-withdraw','${x.id}')">💸</button>
               <button class="btn-d" style="color:#50c878;border-color:#50c87844" onclick="markReturned('${x.id}')">✓</button>
               <button class="btn-d" onclick="del('hub_custody','${x.id}')">✕</button>
             </td>
-          </tr>`).join("")}
+          </tr>
+          ${(x.withdrawals || []).length > 0 ? `<tr><td colspan="8" style="padding:4px 10px 10px;background:#0b0b14">
+            <div style="font-size:10px;color:#555;letter-spacing:1px;margin-bottom:4px">HISTÓRICO DE LEVANTAMENTOS</div>
+            ${(x.withdrawals || []).map(w => `<span style="display:inline-block;margin:2px 8px 2px 0;font-size:11px;color:#ff7850">${fDate(w.date)}: ${fKz(w.amount)}</span>`).join("")}
+          </td></tr>`: ""}`;
+      }).join("")}
           </tbody>
         </table></div>`}
         ${returned.length > 0 ? `
@@ -910,18 +922,33 @@
         </div>`: ""}
       </div>
 
+      ${modal === "custody-withdraw" ? (() => {
+          const item = db.hub_custody.find(x => String(x.id) === String(modalState?.editId));
+          if (!item) return "";
+          return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+          <div class="modal-title">LEVANTAMENTO — ${item.person}</div>
+          <div style="font-size:12px;color:#888;margin-bottom:16px">Restante em custódia: <span style="color:#c9a84c;font-weight:700">${fKz(custodyRemaining(item))}</span></div>
+          <div class="field" style="margin-bottom:12px"><label>Data do Levantamento</label><input type="date" id="cw-date" value="${today()}"/></div>
+          <div class="field" style="margin-bottom:20px"><label>Valor Levantado (Kz)</label><input type="number" id="cw-amount" placeholder="ex: 20000"/></div>
+          <div style="display:flex;gap:12px">
+            <button class="btn-p" style="flex:1" onclick="saveCustodyWithdrawal('${item.id}')">GUARDAR</button>
+            <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+          </div>
+        </div></div>`;
+        })() : ""}
+
       ${modal === "custody" ? modalForm("REGISTAR CUSTÓDIA", "custody", [
-        { id: "person", label: "Nome da Pessoa", type: "text", placeholder: "ex: Tio Manuel" },
-        { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 200000" },
-        { id: "date", label: "Data de Entrada", type: "date", val: today() },
-        { id: "account", label: "Conta onde ficou guardado", type: "select", opts: ["BFA", "BAI", "Multicaixa Express", "PayPay", "Dinheiro em mão"] },
-        { id: "notes", label: "Notas", type: "text", placeholder: "ex: Vai pedir daqui a 2 semanas" },
-      ], async () => {
-        const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), account = gv("account"), notes = gv("notes");
-        if (!person || !amount) return alert("Nome e valor obrigatórios.");
-        await saveDoc("hub_custody", { id: uid(), person, amount, date, account, notes, returned: false, usedInBusiness: false });
-        modal = null; render();
-      }) : ""}`;
+          { id: "person", label: "Nome da Pessoa", type: "text", placeholder: "ex: Tio Manuel" },
+          { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 200000" },
+          { id: "date", label: "Data de Entrada", type: "date", val: today() },
+          { id: "account", label: "Conta onde ficou guardado", type: "select", opts: ["BFA", "BAI", "Multicaixa Express", "PayPay", "Dinheiro em mão"] },
+          { id: "notes", label: "Notas", type: "text", placeholder: "ex: Vai pedir daqui a 2 semanas" },
+        ], async () => {
+          const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), account = gv("account"), notes = gv("notes");
+          if (!person || !amount) return alert("Nome e valor obrigatórios.");
+          await saveDoc("hub_custody", { id: uid(), person, amount, date, account, notes, returned: false, usedInBusiness: false });
+          modal = null; render();
+        }) : ""}`;
     }
 
     function loanPaid(loan) { return (loan.payments || []).reduce((s, p) => s + Number(p.amount || 0), 0); }
@@ -943,6 +970,12 @@
           </div>
           ${asset === "Kz" ? `
           <div class="field"><label>Valor (Kz)</label><input id="m-amount" type="number" step="0.01" value="${editing?.amount || ""}" placeholder="ex: 50000"/></div>
+          <div class="field"><label>Conta de Onde Saiu o Dinheiro</label>
+            <select id="m-loan-account" ${editing ? "disabled" : ""}>
+              <option value="">— Seleccionar —</option>
+              ${db.accounts.map(a => `<option value="${a.id}" ${String(a.id) === String(editing?.accountId) ? "selected" : ""}>${a.name} (${fKz(a.balance)})</option>`).join("")}
+            </select>
+          </div>
           ` : `
           <div class="field"><label>Lote de Origem (stock ${asset})</label>
             <select id="m-loan-lot">
@@ -1045,19 +1078,27 @@
       ${modal === "loan" ? loanModal() : ""}
 
 
-  ${modal === "loan-payment" ? (() => {
+      ${modal === "loan-payment" ? (() => {
           const loan = db.hub_loans.find(l => String(l.id) === String(modalState?.editId));
           if (!loan) return "";
           return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
-      <div class="modal-title">REGISTAR PAGAMENTO — ${loan.person}</div>
-     <div style="font-size:12px;color:#888;margin-bottom:16px">Restante a pagar: <span style="color:#c9a84c;font-weight:700">${fAsset(loanRemaining(loan), loan.asset || "Kz")}</span></div>
-      ${loan.asset && loan.asset !== "Kz" ? `<div style="font-size:10px;color:#ff7850;margin-bottom:12px">⚠ Empréstimo em ${loan.asset}. Se a pessoa devolver em ${loan.asset}, o valor não entra automaticamente numa carteira — regista depois manualmente uma "compra" na Kâmbio se quiseres que volte ao stock.</div>` : ""}
-      <div class="field" style="margin-bottom:12px"><label>Data do Pagamento</label><input type="date" id="lp-date" value="${today()}"/></div>
-      <div class="field" style="margin-bottom:20px"><label>Valor Pago (${loan.asset || "Kz"})</label><input type="number" id="lp-amount" step="0.0001" placeholder="ex: 10000"/></div>      <div style="display:flex;gap:12px">
-        <button class="btn-p" style="flex:1" onclick="saveLoanPayment('${loan.id}')">GUARDAR</button>
-        <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
-      </div>
-    </div></div>`;
+            <div class="modal-title">REGISTAR PAGAMENTO — ${loan.person}</div>
+        <div style="font-size:12px;color:#888;margin-bottom:16px">Restante a pagar: <span style="color:#c9a84c;font-weight:700">${fAsset(loanRemaining(loan), loan.asset || "Kz")}</span></div>
+          ${loan.asset && loan.asset !== "Kz" ? `<div style="font-size:10px;color:#ff7850;margin-bottom:12px">⚠ Empréstimo em ${loan.asset}. Se a pessoa devolver em ${loan.asset}, o valor não entra automaticamente numa carteira — regista depois manualmente uma "compra" na Kâmbio se quiseres que volte ao stock.</div>` : ""}
+          <div class="field" style="margin-bottom:12px"><label>Data do Pagamento</label><input type="date" id="lp-date" value="${today()}"/></div>
+          <div class="field" style="margin-bottom:12px"><label>Valor Pago (${loan.asset || "Kz"})</label><input type="number" id="lp-amount" step="0.0001" placeholder="ex: 10000"/></div>
+          ${(!loan.asset || loan.asset === "Kz") ? `
+          <div class="field" style="margin-bottom:20px"><label>Conta que Recebeu</label>
+            <select id="lp-account">
+              <option value="">— Não aplicável / Dinheiro em mãos —</option>
+              ${db.accounts.map(a => `<option value="${a.id}" ${String(a.id) === String(loan.accountId) ? "selected" : ""}>${a.name} (${fKz(a.balance)})</option>`).join("")}
+            </select>
+          </div>` : ""}
+          <div style="display:flex;gap:12px">
+            <button class="btn-p" style="flex:1" onclick="saveLoanPayment('${loan.id}')">GUARDAR</button>
+            <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+          </div>
+        </div></div>`;
         })() : ""}
 
   ${modal === "sale-payment" ? (() => {
@@ -1085,13 +1126,19 @@
     window.saveLoanPayment = async function (loanId) {
       const date = document.getElementById("lp-date")?.value;
       const amount = parseFloat(document.getElementById("lp-amount")?.value) || 0;
+      const accountId = document.getElementById("lp-account")?.value || null;
       if (!amount) return alert("Valor obrigatório.");
       const loan = db.hub_loans.find(l => String(l.id) === String(loanId));
       if (!loan) return;
-      const payments = [...(loan.payments || []), { id: uid(), date, amount }];
+      const payments = [...(loan.payments || []), { id: uid(), date, amount, accountId }];
       const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
       const autoReturned = totalPaid >= Number(loan.amount || 0);
-      await saveDoc("hub_loans", { ...loan, payments, returned: autoReturned });
+      const updates = [{ col: "hub_loans", item: { ...loan, payments, returned: autoReturned } }];
+      if (accountId) {
+        const account = db.accounts.find(a => String(a.id) === String(accountId));
+        if (account) updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance) + amount } });
+      }
+      await bulkSave(updates);
       modal = null; render();
     };
 
@@ -1125,6 +1172,7 @@
       const editing = modalState?.editId ? db.hub_loans.find(l => String(l.id) === String(modalState.editId)) : null;
       const id = modalState?.editId || uid();
       let lotId = editing?.lotId || null, walletId = editing?.walletId || null;
+      let accountId = editing?.accountId || null;
 
       if (asset !== "Kz" && !editing) {
         lotId = document.getElementById("m-loan-lot")?.value;
@@ -1139,8 +1187,17 @@
         ]);
       }
 
+      if (asset === "Kz" && !editing) {
+        accountId = document.getElementById("m-loan-account")?.value;
+        if (!accountId) return alert("Escolhe a conta de onde saiu o dinheiro.");
+        const account = db.accounts.find(a => String(a.id) === String(accountId));
+        if (!account) return alert("Conta inválida.");
+        if (amount > Number(account.balance)) return alert("Saldo insuficiente nessa conta.");
+        await saveDoc("accounts", { ...account, balance: Number(account.balance) - amount });
+      }
+
       await saveDoc("hub_loans", {
-        id, person, amount, asset, lotId, walletId, date, dueDate, notes,
+        id, person, amount, asset, lotId, walletId, accountId, date, dueDate, notes,
         returned: editing?.returned || false, payments: editing?.payments || []
       });
       modal = null; window._loanAsset = null; render();
@@ -1149,6 +1206,20 @@
       if (!confirm("Marcar como devolvido?")) return;
       const item = db.hub_custody.find(x => x.id === id);
       if (item) await saveDoc("hub_custody", { ...item, returned: true });
+    };
+
+    window.saveCustodyWithdrawal = async function (id) {
+      const date = document.getElementById("cw-date")?.value;
+      const amount = parseFloat(document.getElementById("cw-amount")?.value) || 0;
+      if (!amount) return alert("Valor obrigatório.");
+      const item = db.hub_custody.find(x => String(x.id) === String(id));
+      if (!item) return;
+      if (amount > custodyRemaining(item)) return alert("Valor superior ao que ainda está em custódia.");
+      const withdrawals = [...(item.withdrawals || []), { id: uid(), date, amount }];
+      const totalWithdrawn = withdrawals.reduce((s, w) => s + Number(w.amount || 0), 0);
+      const autoReturned = totalWithdrawn >= Number(item.amount || 0);
+      await saveDoc("hub_custody", { ...item, withdrawals, returned: autoReturned });
+      modal = null; render();
     };
 
     function pageDefinicoes() {

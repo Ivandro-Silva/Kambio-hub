@@ -9,7 +9,7 @@
   <!-- Firebase SDK -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, enableIndexedDbPersistence }
+    import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, setDoc, deleteDoc, onSnapshot }
       from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
     import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut }
       from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -73,7 +73,9 @@
 
     async function initFirebase() {
       try {
-        db_fire = getFirestore(app); await enableIndexedDbPersistence(db_fire).catch(() => { });
+        db_fire = initializeFirestore(app, {
+          localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+        });
         setStatus("connecting");
         COLLECTIONS.forEach(col => {
           const unsub = onSnapshot(collection(db_fire, col), snap => {
