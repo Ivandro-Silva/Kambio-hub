@@ -171,6 +171,10 @@
     const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
+    const r8 = n => Math.round(Number(n) * 1e8) / 1e8;
+    function findMatchingLot(walletId, asset, rateKz) {
+      return db.lots.find(l => String(l.walletId) === String(walletId) && (l.asset || "USDT") === (asset || "USDT") && Number(l.rateKz) === Number(rateKz) && Number(l.remaining) > 0.0001);
+    }
 
     const PAGES = [
       { id: "dashboard", "label": "Dashboard", icon: "▣" },
@@ -548,24 +552,22 @@
       if (Math.abs(totalPaid - totalDue) > 0.5) return alert(`O total distribuído (${fKz(totalPaid)}) não coincide com o total a pagar (${fKz(totalDue)}).`);
       for (const p of payments) if (p.val > Number(p.account.balance)) return alert(`Saldo insuficiente em ${p.account.name}.`);
 
-      const lot = {
-        id: uid(), date, supplierName: supName, asset,
-        usdt, rateKz: rate, totalKz: usdt * rate,
-        walletId: String(walletId), remaining: usdt,
-        notes, createdAt: new Date().toISOString(),
-      };
-
       if (supId === "__new" && supName) await saveDoc("suppliers", { id: uid(), name: supName, phone: "" });
 
       const wallet = db.wallets.find(w => String(w.id) === String(walletId));
+      const existingLot = findMatchingLot(walletId, asset, rate);
+      const lotItem = existingLot
+        ? { ...existingLot, usdt: r8(Number(existingLot.usdt) + usdt), remaining: r8(Number(existingLot.remaining) + usdt), totalKz: r8(Number(existingLot.totalKz) + usdt * rate) }
+        : { id: uid(), date, supplierName: supName, asset, usdt, rateKz: rate, totalKz: usdt * rate, walletId: String(walletId), remaining: usdt, notes, createdAt: new Date().toISOString() };
+
       const updates = [
-        { col: "lots", item: lot },
+        { col: "lots", item: lotItem },
         { col: "wallets", item: { ...wallet, balance: Number(wallet.balance) + usdt } },
       ];
       payments.forEach(p => updates.push({ col: "accounts", item: { ...p.account, balance: Number(p.account.balance) - p.val } }));
 
       await bulkSave(updates);
-      alert("✅ Compra registada! Lote criado.");
+      alert(existingLot ? "✅ Compra registada! Quantidade somada a um lote existente (mesma carteira, ativo e câmbio)." : "✅ Compra registada! Lote criado.");
       navigate("stock");
     };
 
@@ -579,7 +581,7 @@
 
     function getSellAvailLots() {
       return db.lots
-        .filter(l => Number(l.remaining || 0) > 0 && (l.asset || "USDT") === sellAsset && (sellAllWallets || String(l.walletId) === String(sellWalletId)))
+        .filter(l => Number(l.remaining || 0) > 0.0001 && (l.asset || "USDT") === sellAsset && (sellAllWallets || String(l.walletId) === String(sellWalletId)))
         .sort((a, b) => new Date(a.date) - new Date(b.date));
     }
 
@@ -657,19 +659,23 @@
 
           <div style="margin-top:16px">
             <div style="font-size:11px;color:#c9a84c;letter-spacing:2px;margin-bottom:10px">LOTES DISPONÍVEIS (marca os que vais usar nesta venda)</div>
+            <div id="sl-gate-msg" style="font-size:11px;color:#ff7850;margin-bottom:8px;display:${requestedNum > 0 ? "none" : "block"}">⚠ Define primeiro a "Quantidade Solicitada pelo Cliente" para poderes escolher os lotes.</div>
             <div id="sell-lots-wrap" style="display:flex;flex-direction:column;gap:6px;border:1px solid #1e1e30;border-radius:2px;padding:10px;max-height:340px;overflow-y:auto">
               ${availLots.length === 0 ? '<div style="font-size:12px;color:#444">Sem stock disponível para este ativo/carteira.</div>' : availLots.map(l => {
         const w = db.wallets.find(x => String(x.id) === String(l.walletId));
         const sel = sellSelections[l.id];
         const isChecked = sel !== undefined;
+        const gateDisabled = requestedNum <= 0;
+        const remAfter = r8(Number(l.remaining) - (parseFloat(sel) || 0));
         return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                  <input type="checkbox" id="sl-chk-${l.id}" ${isChecked ? "checked" : ""} onchange="toggleSellLot('${l.id}')" style="width:auto"/>
-                  <span style="flex:1;font-size:12px;min-width:160px">${w?.name || "?"} · <span style="color:#c9a84c">${Number(l.rateKz).toLocaleString()} Kz</span> · <span style="color:#555">${fAsset(l.remaining, l.asset || "USDT")} disp.</span></span>
-                  <input type="text" inputmode="decimal" id="sl-val-${l.id}" placeholder="0" style="width:100px" ${isChecked ? "" : "disabled"} value="${isChecked ? sel : ""}" oninput="updateSellLotVal('${l.id}', this.value)"/>
-                  <button type="button" class="btn-ghost" style="padding:6px 9px;font-size:10px" onclick="maxSellLot('${l.id}')">MÁX</button>
-                </div>`;
+                        <input type="checkbox" id="sl-chk-${l.id}" ${isChecked ? "checked" : ""} ${gateDisabled ? "disabled" : ""} onchange="toggleSellLot('${l.id}')" style="width:auto"/>
+                        <span style="flex:1;font-size:12px;min-width:160px">${w?.name || "?"} · <span style="color:#c9a84c">${Number(l.rateKz).toLocaleString()} Kz</span> · <span style="color:#555">${fAsset(l.remaining, l.asset || "USDT")} disp.</span></span>
+                        <input type="text" inputmode="decimal" id="sl-val-${l.id}" placeholder="0" style="width:100px" ${(isChecked && !gateDisabled) ? "" : "disabled"} value="${isChecked ? sel : ""}" oninput="updateSellLotVal('${l.id}', this.value)"/>
+                        <button type="button" id="sl-max-${l.id}" class="btn-ghost" style="padding:6px 9px;font-size:10px" ${gateDisabled ? "disabled" : ""} onclick="maxSellLot('${l.id}')">MÁX</button>
+                        <span id="sl-rem-${l.id}" style="width:100%;font-size:10px;color:#555">${isChecked ? `Ficará com ${fAsset(remAfter, l.asset || "USDT")} restante` : ""}</span>
+                      </div>`;
       }).join("")}
-            </div>
+              </div>
             <div style="font-size:11px;color:#555;margin-top:6px">Total selecionado: <span id="sl-total" style="color:${overRequested ? "#ff5050" : "#7eb8f7"};font-weight:700">${totalUsdt.toFixed(4)}</span> ${sellAsset}${requestedNum > 0 ? ` / Solicitado: <span style="color:#c9a84c">${requestedNum.toFixed(4)}</span>` : ""}</div>
             <div id="sl-warning" style="font-size:11px;color:#ff5050;margin-top:4px">${overRequested ? "⚠ Quantidade selecionada excede o solicitado pelo cliente!" : ""}</div>
           </div>
@@ -707,6 +713,8 @@
     }
 
     window.toggleSellLot = function (lotId) {
+      const requestedNum = parseFloat(document.getElementById("s-requested")?.value) || 0;
+      if (requestedNum <= 0) { alert("Define primeiro a quantidade solicitada pelo cliente."); return; }
       const chk = document.getElementById(`sl-chk-${lotId}`);
       const val = document.getElementById(`sl-val-${lotId}`);
       if (chk.checked) {
@@ -719,27 +727,29 @@
       refreshSell();
     };
     window.updateSellLotVal = function (lotId, value) {
+      const requestedNum = parseFloat(document.getElementById("s-requested")?.value) || 0;
+      if (requestedNum <= 0) return;
       sellSelections[lotId] = value;
       refreshSell();
     };
     window.maxSellLot = function (lotId) {
+      const requestedNum = parseFloat(document.getElementById("s-requested")?.value) || 0;
+      if (requestedNum <= 0) { alert("Define primeiro a quantidade solicitada pelo cliente."); return; }
       const lot = db.lots.find(l => String(l.id) === String(lotId));
       if (!lot) return;
       const chk = document.getElementById(`sl-chk-${lotId}`);
       const val = document.getElementById(`sl-val-${lotId}`);
       if (!chk || !val) return;
-      const requestedNum = parseFloat(document.getElementById("s-requested")?.value) || 0;
       let amount = Number(lot.remaining);
-      if (requestedNum > 0) {
-        const selectedElsewhere = Object.entries(sellSelections).reduce((s, [id, v]) => id === String(lotId) ? s : s + (parseFloat(v) || 0), 0);
-        amount = Math.min(amount, Math.max(0, requestedNum - selectedElsewhere));
-      }
+      const selectedElsewhere = Object.entries(sellSelections).reduce((s, [id, v]) => id === String(lotId) ? s : s + (parseFloat(v) || 0), 0);
+      amount = Math.min(amount, Math.max(0, requestedNum - selectedElsewhere));
       chk.checked = true;
       val.disabled = false;
       val.value = amount.toFixed(4);
       sellSelections[lotId] = val.value;
       refreshSell();
     };
+
     window.refreshSell = function () {
       const rate = parseFloat(document.getElementById("s-rate")?.value) || 0;
       const requestedNum = parseFloat(document.getElementById("s-requested")?.value) || 0;
@@ -761,6 +771,28 @@
       if (totalEl) { totalEl.textContent = totalUsdt.toFixed(4); totalEl.style.color = overRequested ? "#ff5050" : "#7eb8f7"; }
       const warnEl = document.getElementById("sl-warning");
       if (warnEl) warnEl.textContent = overRequested ? "⚠ Quantidade selecionada excede o solicitado pelo cliente!" : "";
+
+      // desbloqueia/bloqueia os lotes dinamicamente consoante a quantidade solicitada
+      const gateMsg = document.getElementById("sl-gate-msg");
+      if (gateMsg) gateMsg.style.display = requestedNum > 0 ? "none" : "block";
+      availLots.forEach(lot => {
+        const chk = document.getElementById(`sl-chk-${lot.id}`);
+        const val = document.getElementById(`sl-val-${lot.id}`);
+        const maxBtn = document.getElementById(`sl-max-${lot.id}`);
+        const remEl = document.getElementById(`sl-rem-${lot.id}`);
+        if (chk) chk.disabled = requestedNum <= 0;
+        if (val) val.disabled = requestedNum <= 0 || sellSelections[lot.id] === undefined;
+        if (maxBtn) maxBtn.disabled = requestedNum <= 0;
+        if (remEl) {
+          const sel = sellSelections[lot.id];
+          if (sel !== undefined) {
+            const remAfter = r8(Number(lot.remaining) - (parseFloat(sel) || 0));
+            remEl.textContent = `Ficará com ${fAsset(remAfter, lot.asset || "USDT")} restante`;
+          } else {
+            remEl.textContent = "";
+          }
+        }
+      });
     };
     window.onSellAssetChange = function (v) { sellAsset = v; sellSelections = {}; render(); };
     window.onSellWalletChange = function (v) { sellWalletId = v; sellSelections = {}; render(); };
@@ -815,7 +847,7 @@
       // deduct lots and wallets (acontece sempre, mesmo com pagamento pendente)
       for (const entry of sellEntries) {
         const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
-        const newRem = Math.max(0, Number(lot.remaining) - Number(entry.usdt));
+        const newRem = r8(Math.max(0, Number(lot.remaining) - Number(entry.usdt)));
         updates.push({ col: "lots", item: { ...lot, remaining: newRem } });
         const wallet = db.wallets.find(w => String(w.id) === String(lot.walletId));
         if (wallet) updates.push({ col: "wallets", item: { ...wallet, balance: Math.max(0, Number(wallet.balance) - Number(entry.usdt)) } });
@@ -835,8 +867,8 @@
 
     // ── STOCK ──────────────────────────────────────────────────────────
     function pageStock() {
-      const active = db.lots.filter(l => Number(l.remaining || 0) > 0);
-      const exhausted = db.lots.filter(l => Number(l.remaining || 0) <= 0);
+      const active = db.lots.filter(l => Number(l.remaining || 0) > 0.0001);
+      const exhausted = db.lots.filter(l => Number(l.remaining || 0) <= 0.0001);
       const stockByAsset = {}; active.forEach(l => { const a = l.asset || "USDT"; stockByAsset[a] = (stockByAsset[a] || 0) + Number(l.remaining || 0); });
       const stockStr = Object.entries(stockByAsset).map(([a, v]) => fAsset(v, a)).join(" · ") || "0";
       return `
@@ -1327,21 +1359,27 @@
       const feeRatio = received / totalQty; // proporção que efetivamente chega ao destino
 
       const updates = [];
+      const destMergeMap = {}; // agrupa lotes desta transferência que caiam no mesmo câmbio/carteira/ativo de destino
       for (const entry of transferLots) {
         const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
         const qty = Number(entry.qty);
-        const newRemaining = Math.max(0, Number(lot.remaining) - qty);
+        const newRemaining = r8(Math.max(0, Number(lot.remaining) - qty));
         updates.push({ col: "lots", item: { ...lot, remaining: newRemaining } });
-        // novo lote na carteira de destino, com o mesmo câmbio de compra, ajustado pela taxa proporcional
-        updates.push({
-          col: "lots", item: {
-            id: uid() + Math.floor(Math.random() * 1000), date, supplierName: lot.supplierName + " (transferido)",
-            usdt: qty * feeRatio, rateKz: lot.rateKz, totalKz: qty * feeRatio * lot.rateKz,
-            walletId: String(toId), remaining: qty * feeRatio, asset,
-            notes: `Transferido de ${fromWallet.name}`, createdAt: new Date().toISOString(),
-          }
-        });
+
+        const receivedQty = qty * feeRatio;
+        const key = `${toId}_${asset}_${Number(lot.rateKz)}`;
+        if (destMergeMap[key]) {
+          destMergeMap[key].usdt = r8(destMergeMap[key].usdt + receivedQty);
+          destMergeMap[key].remaining = r8(destMergeMap[key].remaining + receivedQty);
+          destMergeMap[key].totalKz = r8(destMergeMap[key].totalKz + receivedQty * lot.rateKz);
+        } else {
+          const existing = findMatchingLot(toId, asset, lot.rateKz);
+          destMergeMap[key] = existing
+            ? { ...existing, usdt: r8(Number(existing.usdt) + receivedQty), remaining: r8(Number(existing.remaining) + receivedQty), totalKz: r8(Number(existing.totalKz) + receivedQty * lot.rateKz) }
+            : { id: uid() + Math.floor(Math.random() * 1000), date, supplierName: lot.supplierName + " (transferido)", usdt: receivedQty, rateKz: lot.rateKz, totalKz: receivedQty * lot.rateKz, walletId: String(toId), remaining: receivedQty, asset, notes: `Transferido de ${fromWallet.name}`, createdAt: new Date().toISOString() };
+        }
       }
+      Object.values(destMergeMap).forEach(item => updates.push({ col: "lots", item }));
 
       const transfer = { id: uid(), date, fromId: String(fromId), toId: String(toId), amount: totalQty, fee, received, asset, notes, createdAt: new Date().toISOString() };
       updates.push({ col: "transfers", item: transfer });
