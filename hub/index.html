@@ -254,17 +254,19 @@
     }
 
     function avgBuyRate(asset) {
-      const relevant = db.lots.filter(l => (l.asset || "USDT") === asset);
-      const totalQty = relevant.reduce((s, l) => s + Number(l.usdt || 0), 0);
+      const relevant = db.lots.filter(l => (l.asset || "USDT") === asset && Number(l.remaining || 0) > 0);
+      const totalQty = relevant.reduce((s, l) => s + Number(l.remaining || 0), 0);
       if (!totalQty) return 0;
-      const totalKz = relevant.reduce((s, l) => s + Number(l.usdt || 0) * Number(l.rateKz || 0), 0);
+      const totalKz = relevant.reduce((s, l) => s + Number(l.remaining || 0) * Number(l.rateKz || 0), 0);
       return totalKz / totalQty;
     }
 
     function kbCapitalKz() {
       const walletsKz = db.wallets.reduce((s, w) => {
         const asset = w.asset || "USDT";
-        return s + Number(w.balance || 0) * avgBuyRate(asset);
+        const walletStock = db.lots.filter(l => String(l.walletId) === String(w.id) && (l.asset || "USDT") === asset && Number(l.remaining || 0) > 0)
+          .reduce((total, lot) => total + Number(lot.remaining || 0), 0);
+        return s + walletStock * avgBuyRate(asset);
       }, 0);
       const accountsKz = db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0);
       return walletsKz + accountsKz;
@@ -526,6 +528,7 @@
 
     function incomeExpenseModal(kind) {
       const isIncome = kind === "income";
+      window._movementKind = kind;
       const col = isIncome ? "hub_income" : "hub_expenses";
       const CATS = isIncome ? INCOME_CATS : EXPENSE_CATS;
       const subcats = [...new Set(db[col].map(x => x.subcategory).filter(Boolean))];
@@ -540,13 +543,14 @@
             <input list="subcat-options-${kind}" id="m-subcategory" placeholder="ex: Táxi Trabalho, Táxi Universidade..."/>
             <datalist id="subcat-options-${kind}">${subcats.map(s => `<option value="${s}"></option>`).join("")}</datalist>
           </div>
-          <div class="field"><label>Conta</label>
-            <select id="m-accountId">
+          <div class="field"><label>Conta de ${isIncome ? "entrada" : "saída"}</label>
+            <select id="m-accountId" onchange="previewMovement()">
               <option value="">— Seleccionar —</option>
               ${db.accounts.map(a => `<option value="${a.id}">${a.name} · ${a.type === "pessoal" ? "PESSOAL" : "NEGÓCIO"} (${fKz(a.balance)})</option>`).join("")}
             </select>
           </div>
-          <div class="field"><label>Valor (Kz)</label><input type="number" id="m-amount" placeholder="ex: 5000" step="0.01"/></div>
+          <div class="field"><label>Valor (Kz)</label><input type="number" id="m-amount" placeholder="ex: 5000" step="0.01" oninput="previewMovement()"/></div>
+          <div id="movement-preview" style="font-size:11px;color:#888;background:#0b0b14;border:1px solid #1c1c2e;padding:10px">Escolhe a conta e indica o valor para ver o saldo depois do movimento.</div>
           <div class="field"><label>Descrição</label><input type="text" id="m-description" placeholder="ex: Táxi para o trabalho"/></div>
         </div>
         <div style="display:flex;gap:12px;margin-top:20px">
@@ -1444,11 +1448,23 @@
 
       const account = db.accounts.find(a => String(a.id) === String(accountId));
       if (!account) return alert("Conta inválida.");
+      if (!isIncome && amount > Number(account.balance || 0)) return alert(`Saldo insuficiente em ${account.name}. Saldo actual: ${fKz(account.balance)}.`);
 
       const newBalance = isIncome ? Number(account.balance) + amount : Number(account.balance) - amount;
       await saveDoc("accounts", { ...account, balance: newBalance });
       await saveDoc(col, { id: uid(), date, category, subcategory, accountId: String(accountId), amount, description });
       modal = null; render();
+    };
+
+    window.previewMovement = function () {
+      const preview = document.getElementById("movement-preview");
+      const account = db.accounts.find(a => String(a.id) === String(document.getElementById("m-accountId")?.value));
+      const amount = Number(document.getElementById("m-amount")?.value || 0);
+      if (!preview || !account || !amount) return;
+      const isIncome = window._movementKind === "income";
+      const balance = Number(account.balance || 0);
+      const after = isIncome ? balance + amount : balance - amount;
+      preview.innerHTML = `${isIncome ? "Saldo depois da entrada" : "Saldo depois da saída"}: <strong style="color:${after >= 0 ? "#50c878" : "#ff5050"}">${fKz(after)}</strong><br><span style="color:#555">Saldo actual: ${fKz(balance)} · ${account.name}</span>`;
     };
 
     window.delIncomeEntry = async function (id) {

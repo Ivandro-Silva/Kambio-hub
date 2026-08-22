@@ -159,6 +159,7 @@
     // ══════════════════════════════════════════════════════════════════
     let currentPage = "dashboard";
     let modalState = null; // {type, data}
+    let submitBusy = null;
 
     function hubLink() {
       if (location.protocol === "file:" || location.hostname === "localhost") {
@@ -250,6 +251,24 @@
           el.focus();
           if (start !== null && el.setSelectionRange) { try { el.setSelectionRange(start, end); } catch { } }
         }
+      }
+    }
+
+    function setSubmitLoading(button, loading, label = "A GUARDAR...") {
+      if (!button) return;
+      const operation = button.id === "submit-buy" ? "buy" : button.id === "submit-sell" ? "sell" : null;
+      if (operation) submitBusy = loading ? operation : null;
+      if (loading) {
+        button.dataset.readyLabel = button.textContent;
+        button.disabled = true;
+        button.textContent = label;
+        button.style.opacity = "0.7";
+        button.style.cursor = "wait";
+      } else {
+        button.disabled = false;
+        button.textContent = button.dataset.readyLabel || button.textContent;
+        button.style.opacity = "";
+        button.style.cursor = "";
       }
     }
 
@@ -467,7 +486,7 @@
             </div>
             <div class="field full"><label>Notas</label><input type="text" id="b-notes" placeholder="Opcional..."/></div>
           </div>
-          <button class="btn-primary" style="width:100%;margin-top:16px" onclick="submitBuy()">REGISTAR COMPRA</button>
+          <button id="submit-buy" class="btn-primary" style="width:100%;margin-top:16px" onclick="submitBuy()" ${submitBusy === "buy" ? "disabled" : ""}>${submitBusy === "buy" ? "A GUARDAR COMPRA..." : "REGISTAR COMPRA"}</button>
         </div>
         <div class="card">
           <div class="sec-title">Lotes Recentes</div>
@@ -595,23 +614,28 @@
       if (Math.abs(totalPaid - totalDue) > 0.5) return alert(`O total distribuído (${fKz(totalPaid)}) não coincide com o total a pagar (${fKz(totalDue)}).`);
       for (const p of payments) if (p.val > Number(p.account.balance)) return alert(`Saldo insuficiente em ${p.account.name}.`);
 
-      if (supId === "__new" && supName) await saveDoc("suppliers", { id: uid(), name: supName, phone: "" });
+      const button = document.getElementById("submit-buy");
+      setSubmitLoading(button, true, "A GUARDAR COMPRA...");
+      try {
+        if (supId === "__new" && supName) await saveDoc("suppliers", { id: uid(), name: supName, phone: "" });
 
-      const wallet = db.wallets.find(w => String(w.id) === String(walletId));
-      const existingLot = findMatchingLot(walletId, asset, rate);
-      const lotItem = existingLot
-        ? { ...existingLot, usdt: r8(Number(existingLot.usdt) + usdt), remaining: r8(Number(existingLot.remaining) + usdt), totalKz: r8(Number(existingLot.totalKz) + usdt * rate) }
-        : { id: uid(), date, supplierName: supName, asset, usdt, rateKz: rate, totalKz: usdt * rate, walletId: String(walletId), remaining: usdt, notes, createdAt: new Date().toISOString() };
+        const existingLot = findMatchingLot(walletId, asset, rate);
+        const lotItem = existingLot
+          ? { ...existingLot, usdt: r8(Number(existingLot.usdt) + usdt), remaining: r8(Number(existingLot.remaining) + usdt), totalKz: r8(Number(existingLot.totalKz) + usdt * rate) }
+          : { id: uid(), date, supplierName: supName, asset, usdt, rateKz: rate, totalKz: usdt * rate, walletId: String(walletId), remaining: usdt, notes, createdAt: new Date().toISOString() };
 
-      const updates = [
-        { col: "lots", item: lotItem },
-        { col: "wallets", item: { ...wallet, balance: Number(wallet.balance) + usdt } },
-      ];
-      payments.forEach(p => updates.push({ col: "accounts", item: { ...p.account, balance: Number(p.account.balance) - p.val } }));
+        const updates = [{ col: "lots", item: lotItem }];
+        payments.forEach(p => updates.push({ col: "accounts", item: { ...p.account, balance: Number(p.account.balance) - p.val } }));
 
-      await bulkSave(updates);
-      alert(existingLot ? "✅ Compra registada! Quantidade somada a um lote existente (mesma carteira, ativo e câmbio)." : "✅ Compra registada! Lote criado.");
-      navigate("stock");
+        await bulkSave(updates);
+        alert(existingLot ? "✅ Compra registada! Quantidade somada a um lote existente (mesma carteira, ativo e câmbio)." : "✅ Compra registada! Lote criado.");
+        setSubmitLoading(button, false);
+        navigate("stock");
+      } catch (error) {
+        console.error(error);
+        setSubmitLoading(button, false);
+        alert("Não foi possível concluir a compra. Nenhum novo passo foi confirmado.");
+      }
     };
 
     // ── SELL PAGE ──────────────────────────────────────────────────────
@@ -724,7 +748,7 @@
             <div style="font-size:11px;color:#555;margin-top:6px">Total selecionado: <span id="sl-total" style="color:${overRequested ? "#ff5050" : "#7eb8f7"};font-weight:700">${totalUsdt.toFixed(4)}</span> ${sellAsset}${requestedNum > 0 ? ` / Solicitado: <span style="color:#c9a84c">${requestedNum.toFixed(4)}</span>` : ""}</div>
             <div id="sl-warning" style="font-size:11px;color:#ff5050;margin-top:4px">${overRequested ? "⚠ Quantidade selecionada excede o solicitado pelo cliente!" : ""}</div>
           </div>
-          <button class="btn-primary" style="width:100%;margin-top:14px" onclick="submitSell()">REGISTAR VENDA</button>
+          <button id="submit-sell" class="btn-primary" style="width:100%;margin-top:14px" onclick="submitSell()" ${submitBusy === "sell" ? "disabled" : ""}>${submitBusy === "sell" ? "A GUARDAR VENDA..." : "REGISTAR VENDA"}</button>
         </div>
 
         <div id="sell-summary-wrap">${buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown)}</div>
@@ -922,8 +946,6 @@
         const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
         const newRem = r8(Math.max(0, Number(lot.remaining) - Number(entry.usdt)));
         updates.push({ col: "lots", item: { ...lot, remaining: newRem } });
-        const wallet = db.wallets.find(w => String(w.id) === String(lot.walletId));
-        if (wallet) updates.push({ col: "wallets", item: { ...wallet, balance: Math.max(0, Number(wallet.balance) - Number(entry.usdt)) } });
       }
 
       // credit account — só se o pagamento NÃO for pendente
@@ -932,10 +954,22 @@
         updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance) + totalRevenue } });
       }
 
-      await bulkSave(updates);
-      sellSelections = {};
-      alert("✅ Venda registada com sucesso!");
-      navigate("financial");
+      const button = document.getElementById("submit-sell");
+      setSubmitLoading(button, true, "A GUARDAR VENDA...");
+      try {
+        await bulkSave(updates);
+        sellSelections = {};
+        sellWalletId = "";
+        sellAsset = "USDT";
+        sellAllWallets = false;
+        alert("✅ Venda registada com sucesso!");
+        setSubmitLoading(button, false);
+        navigate("financial");
+      } catch (error) {
+        console.error(error);
+        setSubmitLoading(button, false);
+        alert("Não foi possível concluir a venda. Verifica a ligação e tenta novamente.");
+      }
     };
 
     // ── STOCK ──────────────────────────────────────────────────────────
@@ -1225,7 +1259,6 @@
 
       // captura os valores atuais dos formulários antes de reconstruir o HTML
       const nwNameVal = document.getElementById("nw-name")?.value || "";
-      const nwBalVal = document.getElementById("nw-bal")?.value || "";
       const nwAssetVal = document.getElementById("nw-asset")?.value || "";
       const na2NameVal = document.getElementById("na2-name")?.value || "";
       const na2BalVal = document.getElementById("na2-bal")?.value || "";
@@ -1250,7 +1283,6 @@
           </div>
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             <input id="nw-name" placeholder="Nova carteira" style="flex:1;min-width:100px" value="${nwNameVal}"/>
-            <input id="nw-bal" type="number" placeholder="Saldo" style="width:90px" value="${nwBalVal}"/>
             <input list="asset-options" id="nw-asset" placeholder="Ativo" style="width:90px" value="${nwAssetVal}"/>
             <datalist id="asset-options"><option value="USDT"></option><option value="USDC"></option><option value="EUR"></option><option value="USD"></option></datalist>
             <button class="btn-ghost" onclick="addWallet()">+</button>
@@ -1474,7 +1506,7 @@
     window.delWallet = async (id) => { if (confirm("Eliminar carteira?")) await delDoc("wallets", id); };
     window.adjAccount = async (id, v) => { const a = db.accounts.find(x => String(x.id) === String(id)); if (a) await saveDoc("accounts", { ...a, balance: parseFloat(v) || 0 }); };
     window.delAccount = async (id) => { if (confirm("Eliminar conta?")) await delDoc("accounts", id); };
-    window.addWallet = async () => { const n = document.getElementById("nw-name")?.value?.trim(); if (!n) return; await saveDoc("wallets", { id: uid(), name: n, balance: parseFloat(document.getElementById("nw-bal")?.value) || 0, asset: document.getElementById("nw-asset")?.value?.trim() || "USDT" }); };
+    window.addWallet = async () => { const n = document.getElementById("nw-name")?.value?.trim(); if (!n) return; await saveDoc("wallets", { id: uid(), name: n, balance: 0, asset: document.getElementById("nw-asset")?.value?.trim() || "USDT" }); };
     window.addAccount2 = async () => { const n = document.getElementById("na2-name")?.value?.trim(); if (!n) return; const type = document.getElementById("na2-type")?.value || "negocio"; await saveDoc("accounts", { id: uid(), name: n, balance: parseFloat(document.getElementById("na2-bal")?.value) || 0, type }); };
     window.withdrawProfit = async function () {
       const fromId = document.getElementById("wd-from")?.value;
