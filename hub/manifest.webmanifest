@@ -1,0 +1,9 @@
+{
+  "name": "Grupo Kâmbio Hub",
+  "short_name": "Kâmbio Hub",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#08080f",
+  "theme_color": "#08080f",
+  "lang": "pt"
+}

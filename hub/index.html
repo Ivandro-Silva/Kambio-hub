@@ -4,6 +4,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#08080f" />
+  <link rel="manifest" href="./manifest.webmanifest" />
   <title>Ivandro Silva — Hub Financeiro</title>
 
   <script type="module">
@@ -24,6 +26,7 @@
 
     // ── COLLECTIONS ────────────────────────────────────────────────────
     const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "sales", "lots", "wallets", "accounts", "hub_notes", "clients"];
+    const SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
 
     let app, db_fire, auth, currentUser = null;
     let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [] };
@@ -153,11 +156,48 @@
 
     window.doLogout = async function () { await signOut(auth); };
 
+    function withFocusPreserved(updateFn) {
+      const active = document.activeElement;
+      const id = active && active.id;
+      const isFormControl = active && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName);
+      const formState = isFormControl
+        ? [...document.querySelectorAll("input[id], select[id], textarea[id]")].reduce((state, el) => {
+          state[el.id] = { value: el.value, checked: el.checked };
+          return state;
+        }, {})
+        : null;
+      let start = null, end = null;
+      try {
+        if (active && typeof active.selectionStart === "number") {
+          start = active.selectionStart;
+          end = active.selectionEnd;
+        }
+      } catch { }
+      updateFn();
+      if (formState) {
+        Object.entries(formState).forEach(([fieldId, state]) => {
+          const el = document.getElementById(fieldId);
+          if (!el) return;
+          el.value = state.value;
+          if (typeof state.checked === "boolean") el.checked = state.checked;
+        });
+      }
+      if (id) {
+        const el = document.getElementById(id);
+        if (el) {
+          el.focus();
+          if (start !== null && el.setSelectionRange) { try { el.setSelectionRange(start, end); } catch { } }
+        }
+      }
+    }
+
     function render() {
       const el = document.getElementById("app");
       if (!el) return;
-      el.innerHTML = layout();
-      attachAll();
+      withFocusPreserved(() => {
+        el.innerHTML = layout();
+        attachAll();
+      });
     }
 
     function layout() {
@@ -347,7 +387,7 @@
 
       // Salário vs retirado, baseado no lucro da Kâmbio no período
       const kambioProfitP = db.sales.filter(s => inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
-      const salarioAlocado = kambioProfitP * 0.3;
+      const salarioAlocado = kambioProfitP * SPLIT.salary;
       const retiradoP = expenseP.reduce((s, x) => s + Number(x.amount || 0), 0);
       const excedente = retiradoP - salarioAlocado;
 
@@ -1335,7 +1375,7 @@
     }
 
     function splitBox(label, amount, accent) {
-      const reinvest = amount * 0.6, salary = amount * 0.3, savings = amount * 0.1;
+      const reinvest = amount * SPLIT.reinvest, salary = amount * SPLIT.salary, savings = amount * SPLIT.savings;
       return `<div class="card">
     <div class="sec-title">${label}</div>
     <div style="font-size:11px;color:#666;margin-bottom:12px">Lucro do período: <span style="color:${accent};font-weight:700">${fKz(amount)}</span></div>
@@ -1459,6 +1499,7 @@
     };
 
     initAppAndAuth();
+    if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
   </script>
 
   <style>

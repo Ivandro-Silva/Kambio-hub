@@ -4,6 +4,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#08080f" />
+  <link rel="manifest" href="./manifest.webmanifest" />
   <title>Kâmbio Business PRO</title>
 
   <!-- Firebase SDK -->
@@ -28,7 +30,8 @@
     };
     // ══════════════════════════════════════════════════════════════════
 
-    const COLLECTIONS = ["lots", "sales", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes"];
+    const COLLECTIONS = ["lots", "sales", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "settings"];
+    const SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
     const DEFAULT_WALLETS = ["RedotPay", "Binance", "Bybit", "Kast", "Grey"];
     const DEFAULT_ACCOUNTS = [
       { name: "BFA", type: "pessoal" },
@@ -39,7 +42,7 @@
       { name: "É-Kwanza", type: "negocio" },
     ];
     let app, db_fire, auth, currentUser = null;
-    let db = { lots: [], sales: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [] };
+    let db = { lots: [], sales: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], settings: [] };
     let unsubscribers = [];
 
     // ── LOCAL FALLBACK (quando Firebase não está configurado) ──────────
@@ -218,6 +221,13 @@
     function withFocusPreserved(updateFn) {
       const active = document.activeElement;
       const id = active && active.id;
+      const isFormControl = active && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName);
+      const formState = isFormControl
+        ? [...document.querySelectorAll("input[id], select[id], textarea[id]")].reduce((state, el) => {
+          state[el.id] = { value: el.value, checked: el.checked };
+          return state;
+        }, {})
+        : null;
       let start = null, end = null;
       try {
         if (active && typeof active.selectionStart === "number") {
@@ -226,6 +236,14 @@
         }
       } catch { }
       updateFn();
+      if (formState) {
+        Object.entries(formState).forEach(([fieldId, state]) => {
+          const el = document.getElementById(fieldId);
+          if (!el) return;
+          el.value = state.value;
+          if (typeof state.checked === "boolean") el.checked = state.checked;
+        });
+      }
       if (id) {
         const el = document.getElementById(id);
         if (el) {
@@ -318,6 +336,31 @@
     }
 
     // ── DASHBOARD ──────────────────────────────────────────────────────
+    function monthlyProfitChart() {
+      const now = new Date();
+      const months = Array.from({ length: 6 }, (_, i) => new Date(now.getFullYear(), now.getMonth() - 5 + i, 1));
+      const values = months.map(month => db.sales.filter(s => {
+        const date = new Date(s.date);
+        return date.getMonth() === month.getMonth() && date.getFullYear() === month.getFullYear();
+      }).reduce((sum, sale) => sum + Number(sale.totalProfit || 0), 0));
+      const max = Math.max(...values.map(value => Math.abs(value)), 1);
+      return `<div class="card" style="margin-top:20px">
+        <div class="sec-title">Evolução do Lucro — últimos 6 meses</div>
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;align-items:end;height:150px;margin-top:14px">
+          ${months.map((month, i) => {
+            const value = values[i];
+            const height = Math.max(4, Math.round(Math.abs(value) / max * 105));
+            const color = value >= 0 ? "#50c878" : "#ff5050";
+            return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:end;height:100%;gap:5px">
+              <span style="font-size:9px;color:${color};white-space:nowrap">${fKz(value)}</span>
+              <div title="${fKz(value)}" style="width:100%;max-width:42px;height:${height}px;background:${color};opacity:.8;border-radius:2px 2px 0 0"></div>
+              <span style="font-size:9px;color:#666">${month.toLocaleDateString("pt-AO", { month: "short" }).replace(".", "")}</span>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>`;
+    }
+
     function pageDashboard() {
       const now = new Date();
       const todayStr = today();
@@ -329,7 +372,7 @@
       const stockStr = Object.entries(stockByAsset).map(([a, v]) => fAsset(v, a)).join(" · ") || "0";
       const recent = [...db.sales].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
       const topC = topClientMonth();
-      const suggest = monthP * 0.30;
+      const suggest = monthP * SPLIT.salary;
 
       return `
   <div class="grid4" style="margin-bottom:20px">
@@ -370,15 +413,15 @@
     <div class="card">
       <div class="sec-title">💡 Dica Financeira</div>
       <div style="font-size:12px;color:#888;margin-bottom:12px">Lucro deste mês: <span style="color:#c9a84c;font-weight:700">${fKz(monthP)}</span></div>
-      <div class="budget-box blue"><div class="budget-label">REINVESTIR (60%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(monthP * 0.6)}</div></div>
+      <div class="budget-box blue"><div class="budget-label">REINVESTIR (60%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(monthP * SPLIT.reinvest)}</div></div>
       <div class="budget-box green"><div class="budget-label">SALÁRIO (30%)</div><div class="budget-val" style="color:#50c878">${fKz(suggest)}</div></div>
-      <div class="budget-box gold"><div class="budget-label">POUPANÇA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(monthP * 0.1)}</div></div>      ${topC ? `<div class="top-client-box">
+      <div class="budget-box gold"><div class="budget-label">POUPANÇA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(monthP * SPLIT.savings)}</div></div>      ${topC ? `<div class="top-client-box">
         <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:4px">★ CLIENTE DO MÊS</div>
         <div style="font-weight:700;color:#e8e4d9">${topC.name}</div>
         <div style="font-size:11px;color:#777">${fU(topC.volume)} comprados este mês</div>
       </div>`: ""}
     </div>
-  </div>`;
+  </div>${monthlyProfitChart()}`;
     }
 
     // ── BUY PAGE ───────────────────────────────────────────────────────
@@ -627,7 +670,9 @@
               </select>
             </div>
             <div class="field"><label>Câmbio de Venda (Kz/${sellAsset}) *</label><input type="number" id="s-rate" placeholder="ex: 1150" value="${rate || ""}" oninput="refreshSell()"/></div>
+            <div class="field"><label>Margem-alvo (%)</label><div style="display:flex;gap:6px"><input type="number" id="s-margin" value="5" min="0" step="0.1"/><button type="button" class="btn-ghost" onclick="suggestSellRate()">SUGERIR</button></div></div>
             <div class="field"><label>Quantidade Solicitada pelo Cliente</label><input type="number" id="s-requested" placeholder="ex: 500" value="${requestedVal}" oninput="refreshSell()"/></div>
+            <div class="field"><label>Venda rápida por valor (Kz)</label><div style="display:flex;gap:6px"><input type="number" id="s-amount-kz" placeholder="ex: 575000"/><button type="button" class="btn-ghost" onclick="quickSellByValue()">SELECCIONAR</button></div></div>
             <div class="field"><label>Cliente</label>
               <select id="s-client" onchange="document.getElementById('s-aff').value=''">
                 <option value="">— Seleccionar —</option>
@@ -794,6 +839,34 @@
         }
       });
     };
+    window.suggestSellRate = function () {
+      const lots = getSellAvailLots();
+      const quantity = lots.reduce((sum, lot) => sum + Number(lot.remaining || 0), 0);
+      if (!quantity) return alert("Não existe stock disponível para calcular a taxa.");
+      const cost = lots.reduce((sum, lot) => sum + Number(lot.remaining || 0) * Number(lot.rateKz || 0), 0) / quantity;
+      const margin = Math.max(0, Number(document.getElementById("s-margin")?.value || 0));
+      const rate = r8(cost * (1 + margin / 100));
+      const input = document.getElementById("s-rate");
+      if (input) input.value = rate;
+      refreshSell();
+    };
+    window.quickSellByValue = function () {
+      const rate = Number(document.getElementById("s-rate")?.value || 0);
+      const amount = Number(document.getElementById("s-amount-kz")?.value || 0);
+      if (rate <= 0 || amount <= 0) return alert("Indica primeiro o câmbio de venda e o valor em Kz.");
+      const requested = amount / rate;
+      sellSelections = {};
+      let remaining = requested;
+      getSellAvailLots().forEach(lot => {
+        if (remaining <= 0) return;
+        const quantity = Math.min(Number(lot.remaining || 0), remaining);
+        if (quantity > 0) sellSelections[lot.id] = r8(quantity).toFixed(4);
+        remaining -= quantity;
+      });
+      const requestedInput = document.getElementById("s-requested");
+      if (requestedInput) requestedInput.value = requested.toFixed(4);
+      refreshSell();
+    };
     window.onSellAssetChange = function (v) { sellAsset = v; sellSelections = {}; render(); };
     window.onSellWalletChange = function (v) { sellWalletId = v; sellSelections = {}; render(); };
     window.onSellAllWalletsChange = function (checked) { sellAllWallets = checked; sellSelections = {}; render(); };
@@ -871,12 +944,15 @@
       const exhausted = db.lots.filter(l => Number(l.remaining || 0) <= 0.0001);
       const stockByAsset = {}; active.forEach(l => { const a = l.asset || "USDT"; stockByAsset[a] = (stockByAsset[a] || 0) + Number(l.remaining || 0); });
       const stockStr = Object.entries(stockByAsset).map(([a, v]) => fAsset(v, a)).join(" · ") || "0";
+      const minimum = getStockMinimum();
+      const lowStock = Object.entries(stockByAsset).filter(([, value]) => value < minimum);
       return `
       <div class="grid4" style="margin-bottom:20px">
         ${statCard("Lotes Activos", active.length, "#50c878", "◈")}
         ${statCard("Disponível", stockStr, "#7eb8f7", "◆")}        ${statCard("Valor em Stock", fKz(active.reduce((s, l) => s + Number(l.remaining) * Number(l.rateKz), 0)), "#c9a84c", "▣")}
         ${statCard("Lotes Esgotados", exhausted.length, "#555", "○")}
       </div>
+      ${minimum > 0 && lowStock.length ? `<div class="card" style="margin-bottom:16px;border-color:#ff785066;color:#ffb090">⚠ Stock abaixo do mínimo: ${lowStock.map(([asset, value]) => `${asset} (${fAsset(value, asset)} / mínimo ${fAsset(minimum, asset)})`).join(" · ")}</div>` : ""}
       <div class="card" style="margin-bottom:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div class="sec-title" style="margin:0">Lotes com Stock Disponível</div>
@@ -1347,9 +1423,14 @@
       if (!fromWallet || !toWallet) return alert("Carteira inválida.");
       if ((fromWallet.asset || "USDT") !== (toWallet.asset || "USDT")) return alert("As carteiras devem ter o mesmo ativo.");
 
-      for (const entry of transferLots) {
-        const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
-        if (!lot || Number(entry.qty) > Number(lot.remaining)) return alert(`Quantidade superior ao stock do lote de ${lot?.supplierName || "?"}.`);
+      const transferByLot = transferLots.reduce((map, entry) => {
+        const lotId = String(entry.lotId);
+        map[lotId] = (map[lotId] || 0) + Number(entry.qty);
+        return map;
+      }, {});
+      for (const [lotId, quantity] of Object.entries(transferByLot)) {
+        const lot = db.lots.find(l => String(l.id) === lotId);
+        if (!lot || quantity <= 0 || quantity > Number(lot.remaining)) return alert(`Quantidade superior ao stock do lote de ${lot?.supplierName || "?"}.`);
       }
 
       const totalQty = transferLots.reduce((s, e) => s + Number(e.qty), 0);
@@ -1360,9 +1441,8 @@
 
       const updates = [];
       const destMergeMap = {}; // agrupa lotes desta transferência que caiam no mesmo câmbio/carteira/ativo de destino
-      for (const entry of transferLots) {
-        const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
-        const qty = Number(entry.qty);
+      Object.entries(transferByLot).forEach(([lotId, qty]) => {
+        const lot = db.lots.find(l => String(l.id) === lotId);
         const newRemaining = r8(Math.max(0, Number(lot.remaining) - qty));
         updates.push({ col: "lots", item: { ...lot, remaining: newRemaining } });
 
@@ -1378,7 +1458,7 @@
             ? { ...existing, usdt: r8(Number(existing.usdt) + receivedQty), remaining: r8(Number(existing.remaining) + receivedQty), totalKz: r8(Number(existing.totalKz) + receivedQty * lot.rateKz) }
             : { id: uid() + Math.floor(Math.random() * 1000), date, supplierName: lot.supplierName + " (transferido)", usdt: receivedQty, rateKz: lot.rateKz, totalKz: receivedQty * lot.rateKz, walletId: String(toId), remaining: receivedQty, asset, notes: `Transferido de ${fromWallet.name}`, createdAt: new Date().toISOString() };
         }
-      }
+      });
       Object.values(destMergeMap).forEach(item => updates.push({ col: "lots", item }));
 
       const transfer = { id: uid(), date, fromId: String(fromId), toId: String(toId), amount: totalQty, fee, received, asset, notes, createdAt: new Date().toISOString() };
@@ -1424,6 +1504,30 @@
 
     // ── FINANCIAL ──────────────────────────────────────────────────────
     let finPeriod = "month";
+    function spreadHistoryTable() {
+      const groups = {};
+      db.sales.forEach(sale => {
+        const date = new Date(sale.date);
+        if (Number.isNaN(date.getTime())) return;
+        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+        const quantity = Number(sale.totalUsdt || 0);
+        const buyCost = (sale.lotEntries || []).reduce((sum, entry) => sum + Number(entry.usdt || 0) * Number(entry.buyRate || 0), 0);
+        const group = groups[key] || { date, quantity: 0, revenue: 0, buyCost: 0 };
+        group.quantity += quantity;
+        group.revenue += Number(sale.totalRevenue || 0);
+        group.buyCost += buyCost;
+        groups[key] = group;
+      });
+      const rows = Object.values(groups).sort((a, b) => b.date - a.date).slice(0, 12);
+      if (!rows.length) return '<div class="empty">SEM HISTÓRICO DE TAXAS</div>';
+      return `<div class="card" style="margin-top:20px"><div class="sec-title">Histórico de Taxas e Spread</div>
+        <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Período</th><th>Volume</th><th>Venda média</th><th>Custo médio</th><th>Spread médio</th></tr></thead><tbody>
+        ${rows.map(row => {
+          const sellRate = row.quantity ? row.revenue / row.quantity : 0;
+          const buyRate = row.quantity ? row.buyCost / row.quantity : 0;
+          return `<tr><td>${row.date.toLocaleDateString("pt-AO", { month: "long", year: "numeric" })}</td><td>${fU(row.quantity)}</td><td style="color:#c9a84c">${sellRate.toLocaleString("pt-AO", { maximumFractionDigits: 2 })} Kz</td><td>${buyRate.toLocaleString("pt-AO", { maximumFractionDigits: 2 })} Kz</td><td style="color:${sellRate >= buyRate ? "#50c878" : "#ff5050"}">${(sellRate - buyRate).toLocaleString("pt-AO", { maximumFractionDigits: 2 })} Kz</td></tr>`;
+        }).join("")}</tbody></table></div></div>`;
+    }
     function pageFinancial() {
       const now = new Date();
       const PERIODS = [{ id: "today", "label": "HOJE" }, { id: "week", "label": "SEMANA" }, { id: "month", "label": "MÊS" }, { id: "year", "label": "ANO" }, { id: "all", "label": "TUDO" }];
@@ -1455,9 +1559,9 @@
         <div class="card">
           <div class="sec-title">💰 Gestão do Lucro</div>
           <div style="font-size:12px;color:#666;margin-bottom:16px">Lucro de <span style="color:#c9a84c">${fKz(profit)}</span>:</div>
-          <div class="budget-box blue"><div class="budget-label">REINVESTIR (60%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(profit * .6)}</div><div style="font-size:10px;color:#444;margin-top:4px">Aumenta o capital de giro</div></div>
-          <div class="budget-box green"><div class="budget-label">SALÁRIO (30%)</div><div class="budget-val" style="color:#50c878">${fKz(profit * .3)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
-          <div class="budget-box gold"><div class="budget-label">POUPANÇA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit * .1)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>    </div>
+          <div class="budget-box blue"><div class="budget-label">REINVESTIR (60%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(profit * SPLIT.reinvest)}</div><div style="font-size:10px;color:#444;margin-top:4px">Aumenta o capital de giro</div></div>
+          <div class="budget-box green"><div class="budget-label">SALÁRIO (30%)</div><div class="budget-val" style="color:#50c878">${fKz(profit * SPLIT.salary)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
+          <div class="budget-box gold"><div class="budget-label">POUPANÇA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit * SPLIT.savings)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>    </div>
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
             <div class="sec-title" style="margin:0">Vendas do Período</div>
@@ -1476,7 +1580,7 @@
             </tr>`).join("")}</tbody>
           </table></div>`}
         </div>
-      </div>`;
+      </div>${monthlyProfitChart()}${spreadHistoryTable()}`;
     }
     window.setFinPeriod = function (p) { finPeriod = p; render(); };
 
@@ -1505,18 +1609,31 @@
             <button class="btn-ghost" id="ns-submit" onclick="addSup()">+</button>
           </div>
         </div>
-        <div class="card">
-          <div class="sec-title">Dados & Backup</div>
-          <div style="display:flex;flex-direction:column;gap:12px">
-            <button class="btn-primary" onclick="exportData()">⬇ EXPORTAR BACKUP JSON</button>
-            <label class="btn-ghost" style="text-align:center;cursor:pointer;padding:8px 16px;font-size:12px">
+         <div class="card">
+           <div class="sec-title">Dados & Backup</div>
+           <div style="display:flex;flex-direction:column;gap:12px">
+             <button class="btn-primary" onclick="exportData()">⬇ EXPORTAR BACKUP JSON</button>
+             <div style="display:flex;gap:8px;flex-wrap:wrap">
+               <button class="btn-ghost" style="flex:1" onclick="exportCsv('sales')">VENDAS CSV</button>
+               <button class="btn-ghost" style="flex:1" onclick="exportCsv('lots')">LOTES CSV</button>
+               <button class="btn-ghost" style="flex:1" onclick="exportCsv('clients')">CLIENTES CSV</button>
+             </div>
+             <label class="btn-ghost" style="text-align:center;cursor:pointer;padding:8px 16px;font-size:12px">
               ⬆ IMPORTAR BACKUP
               <input type="file" accept=".json" onchange="importData(event)" style="display:none"/>
             </label>
             <div style="border-top:1px solid #1a1a2e;padding-top:12px">
               <button class="btn-danger" style="width:100%;padding:10px" onclick="resetData()">⚠ APAGAR TODOS OS DADOS</button>
-            </div>
-          </div>
+           </div>
+           <div style="border-top:1px solid #1a1a2e;margin-top:14px;padding-top:14px">
+             <div class="sec-title" style="font-size:11px">Alerta de Stock Mínimo</div>
+             <div style="display:flex;gap:8px;align-items:center">
+               <input type="number" id="stock-minimum" min="0" step="0.0001" value="${getStockMinimum() || ""}" placeholder="0 = desactivado" style="flex:1"/>
+               <button class="btn-ghost" onclick="saveStockMinimum()">GUARDAR</button>
+             </div>
+             <div style="font-size:10px;color:#555;margin-top:6px">Aplica a cada activo individualmente.</div>
+           </div>
+         </div>
           <div style="margin-top:16px;padding:12px;background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px">
             <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:6px">ESTADO FIREBASE</div>
             <div id="sync-status-2"></div>
@@ -1557,10 +1674,25 @@
       document.getElementById("ns-name").value = s.name;
       document.getElementById("ns-phone").value = s.phone || "";
       document.getElementById("ns-submit").textContent = "✓ ATUALIZAR";
-    }; window.exportData = () => {
-      const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
-      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `kambio_backup_${today()}.json`; a.click();
     };
+    function downloadFile(name, content, type) {
+      const blob = new Blob([content], { type });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+    window.exportCsv = function (collection) {
+      const rows = db[collection] || [];
+      if (!rows.length) return alert("Não existem dados para exportar.");
+      const keys = [...new Set(rows.flatMap(row => Object.keys(row)))];
+      const quote = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
+      const csv = [keys, ...rows.map(row => keys.map(key => typeof row[key] === "object" ? JSON.stringify(row[key]) : row[key]))]
+        .map(row => row.map(quote).join(",")).join("\n");
+      downloadFile(`kambio_${collection}_${today()}.csv`, "\ufeff" + csv, "text/csv;charset=utf-8");
+    };
+    window.exportData = () => downloadFile(`kambio_backup_${today()}.json`, JSON.stringify(db, null, 2), "application/json");
     window.importData = (e) => {
       const f = e.target.files[0]; if (!f) return;
       const r = new FileReader();
@@ -1576,7 +1708,8 @@
       }; r.readAsText(f);
     };
     window.resetData = async () => {
-      if (!confirm("⚠️ Apagar TUDO? Esta acção é irreversível.")) return;
+      if (!confirm("⚠️ Será criado um backup JSON e depois serão apagados TODOS os dados. Continuar?")) return;
+      exportData();
       for (const col of COLLECTIONS) for (const item of [...db[col]]) await delDoc(col, item.id);
       localStorage.removeItem(LOCAL_KEY);
       seeded = false;
@@ -1584,7 +1717,8 @@
     };
 
     window.resetCollection = async function (col, label) {
-      if (!confirm(`⚠️ Apagar todos os dados de "${label}"? Esta ação é irreversível.`)) return;
+       if (!confirm(`⚠️ Será criado um backup JSON e depois serão apagados todos os dados de "${label}". Continuar?`)) return;
+       exportData();
       for (const item of [...db[col]]) await delDoc(col, item.id);
       alert(`✅ Dados de "${label}" apagados.`);
       render();
@@ -1609,6 +1743,16 @@
       return walletStock(walletId).reduce((s, l) => s + Number(l.remaining || 0), 0);
     }
 
+    function getStockMinimum() {
+      return Number((db.settings || []).find(s => s.id === "stock-minimum")?.value || 0);
+    }
+
+    window.saveStockMinimum = async function () {
+      const value = Math.max(0, Number(document.getElementById("stock-minimum")?.value || 0));
+      await saveDoc("settings", { id: "stock-minimum", value });
+      alert("✅ Mínimo de stock guardado.");
+    };
+
     function statCard(label, value, color, icon) {
       return `
       <div class="stat-card">
@@ -1625,6 +1769,7 @@
 
     // ── BOOT ───────────────────────────────────────────────────────────
     initAppAndAuth();
+    if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
   </script>
 
   <style>
