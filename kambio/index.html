@@ -30,7 +30,7 @@
     };
     // ══════════════════════════════════════════════════════════════════
 
-    const COLLECTIONS = ["lots", "sales", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "settings"];
+    const COLLECTIONS = ["lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "settings", "opening_balances"];
     const SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
     const DEFAULT_WALLETS = ["RedotPay", "Binance", "Bybit", "Kast", "Grey"];
     const DEFAULT_ACCOUNTS = [
@@ -42,7 +42,7 @@
       { name: "É-Kwanza", type: "negocio" },
     ];
     let app, db_fire, auth, currentUser = null;
-    let db = { lots: [], sales: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], settings: [] };
+    let db = { lots: [], sales: [], intermediations: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], settings: [], opening_balances: [] };
     let unsubscribers = [];
 
     // ── LOCAL FALLBACK (quando Firebase não está configurado) ──────────
@@ -50,7 +50,7 @@
     const isConfigured = () => !firebaseConfig.apiKey.includes("COLE_AQUI");
 
     function localLoad() {
-      try { return JSON.parse(localStorage.getItem(LOCAL_KEY)) || db; } catch { return db; }
+      try { return { ...db, ...(JSON.parse(localStorage.getItem(LOCAL_KEY)) || {}) }; } catch { return db; }
     }
     function localSave() {
       localStorage.setItem(LOCAL_KEY, JSON.stringify(db));
@@ -103,7 +103,7 @@
       const id = item.id ? String(item.id) : String(Date.now());
       const data = { ...item, id };
       if (!isConfigured()) {
-        db[col] = [...db[col].filter(x => String(x.id) !== id), data];
+        db[col] = [...(db[col] || []).filter(x => String(x.id) !== id), data];
         localSave(); render(); return id;
       }
       await setDoc(doc(db_fire, col, id), data);
@@ -184,6 +184,7 @@
       { id: "dashboard", "label": "Dashboard", icon: "▣" },
       { id: "buy", "label": "Comprar", icon: "↓" },
       { id: "sell", "label": "Vender", icon: "↑" },
+      { id: "intermediation", "label": "Intermediação", icon: "⇢" },
       { id: "stock", "label": "Stock", icon: "◈" },
       { id: "clients", "label": "Clientes", icon: "◉" },
       { id: "ranking", "label": "Ranking", icon: "★" },
@@ -342,6 +343,7 @@
         case "dashboard": return pageDashboard();
         case "buy": return pageBuy();
         case "sell": return pageSell();
+        case "intermediation": return pageIntermediation();
         case "stock": return pageStock();
         case "clients": return pageClients();
         case "ranking": return pageRanking();
@@ -408,8 +410,8 @@
         ${(() => { const t = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; t[a] = (t[a] || 0) + walletBalance(w.id); }); return Object.entries(t).map(([a, v]) => `<div class="row bold"><span>TOTAL ${a}</span><span style="color:#7eb8f7">${fAsset(v, a)}</span></div>`).join(""); })()}
       </div>
     </div>
-    <div class="card">
-      <div class="sec-title">Contas em Kwanzas</div>
+     <div class="card">
+       <div class="sec-title">Contas em Kwanzas</div>
       ${db.accounts.map(a => `<div class="row"><span>${a.name}</span><span style="color:#c9a84c;font-weight:700">${fKz(a.balance)}</span></div>`).join("")}
       <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
         <div class="row bold"><span>TOTAL</span><span style="color:#c9a84c">${fKz(db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0))}</span></div>
@@ -508,7 +510,7 @@
       }).join("")}</tbody>
           </table></div>`}
         </div>
-      </div>`;
+       </div>`;
     }
 
     window.onSupChange = function () {
@@ -972,6 +974,132 @@
       }
     };
 
+    // ── INTERMEDIAÇÃO ──────────────────────────────────────────────────
+    const INTERMEDIATION_STATUS = {
+      pendente: ["PENDENTE", "#c9a84c"],
+      comprado: ["COMPRADO", "#7eb8f7"],
+      enviado: ["ENVIADO", "#c084fc"],
+      concluido: ["CONCLUÍDO", "#50c878"],
+      cancelado: ["CANCELADO", "#ff5050"],
+    };
+
+    function fInterAsset(value, asset) {
+      return `${Number(value || 0).toLocaleString("pt-AO", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${asset}`;
+    }
+
+    function pageIntermediation() {
+      const operations = [...(db.intermediations || [])].sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
+      const pending = operations.filter(item => !["concluido", "cancelado"].includes(item.status));
+      const profit = operations.reduce((sum, item) => sum + Number(item.profit || 0), 0);
+      return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+        <div><div class="sec-title" style="margin:0">Intermediação de Activos</div><div style="font-size:11px;color:#666;margin-top:5px">Opera EUR, BRL ou outros activos sem os adicionar ao stock das tuas carteiras.</div></div>
+        <button class="btn-primary" onclick="openModal('new-intermediation')">+ NOVA INTERMEDIAÇÃO</button>
+      </div>
+      <div class="grid4" style="margin-bottom:20px">
+        ${statCard("Operações", operations.length, "#7eb8f7", "⇢")}
+        ${statCard("Por concluir", pending.length, pending.length ? "#c9a84c" : "#50c878", "◌")}
+        ${statCard("Lucro Total", fKz(profit), profit >= 0 ? "#50c878" : "#ff5050", "◆")}
+        ${statCard("Sem Stock", "DIRECTO", "#c084fc", "↗")}
+      </div>
+      <div class="card" style="overflow-x:auto">
+        ${operations.length === 0 ? '<div class="empty">SEM INTERMEDIAÇÕES REGISTADAS</div>' : `<table class="tbl"><thead><tr><th>Data</th><th>Fornecedor</th><th>Cliente</th><th>Activo</th><th>Quantidade</th><th>Custo</th><th>Cobrado</th><th>Lucro</th><th>Estado</th><th></th></tr></thead><tbody>
+          ${operations.map(item => {
+            const client = db.clients.find(c => String(c.id) === String(item.clientId));
+            const status = INTERMEDIATION_STATUS[item.status] || [item.status || "PENDENTE", "#c9a84c"];
+            return `<tr><td>${fDate(item.date)}</td><td>${item.supplier || "—"}</td><td>${client?.name || item.clientName || "—"}</td><td style="color:#c084fc">${item.asset}</td><td>${fInterAsset(item.quantity, item.asset)}</td><td>${fKz(item.totalCost)}</td><td>${fKz(item.totalRevenue)}</td><td style="color:${Number(item.profit) >= 0 ? "#50c878" : "#ff5050"};font-weight:700">${fKz(item.profit)}</td><td><span style="color:${status[1]}">${status[0]}</span></td><td style="white-space:nowrap"><select onchange="updateIntermediationStatus('${item.id}',this.value)" style="width:auto;font-size:10px"><option value="${item.status}">${status[0]}</option>${Object.entries(INTERMEDIATION_STATUS).filter(([key]) => key !== item.status).map(([key, value]) => `<option value="${key}">${value[0]}</option>`).join("")}</select>${item.paymentMode === "capital_proprio" && !item.revenueReceived && item.status !== "cancelado" ? `<button class="btn-ghost" style="font-size:9px;margin-left:4px" onclick="receiveIntermediation('${item.id}')">RECEBER</button>` : ""}<button class="btn-danger" style="margin-left:4px" onclick="deleteIntermediation('${item.id}')">✕</button></td></tr>`;
+          }).join("")}
+        </tbody></table>`}
+      </div>${buildIntermediationModal()}`;
+    }
+
+    function buildIntermediationModal() {
+      if (modalState?.type !== "new-intermediation") return "";
+      return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()" style="max-width:620px">
+        <div class="modal-title">NOVA INTERMEDIAÇÃO</div>
+        <div style="font-size:11px;color:#888;line-height:1.7;margin-bottom:14px">O activo é enviado directamente para o cliente. Esta operação não cria nem desconta stock das carteiras.</div>
+        <div class="form-grid">
+          <div class="field"><label>Data *</label><input type="date" id="im-date" value="${today()}"/></div>
+          <div class="field"><label>Activo *</label><input id="im-asset" value="EUR" placeholder="EUR, BRL..." oninput="calcIntermediation()"/></div>
+          <div class="field"><label>Quantidade *</label><input type="number" id="im-quantity" min="0" step="0.0001" placeholder="ex: 500" oninput="calcIntermediation()"/></div>
+          <div class="field"><label>Fornecedor / plataforma *</label><input id="im-supplier" list="im-supplier-options" placeholder="ex: Binance, cliente parceiro, banco"/><datalist id="im-supplier-options">${[...new Set((db.suppliers || []).map(s => s.name).filter(Boolean))].map(name => `<option value="${name}"></option>`).join("")}</datalist></div>
+          <div class="field"><label>Cliente</label><select id="im-client"><option value="">— Seleccionar —</option>${db.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}</select></div>
+          <div class="field"><label>Câmbio de custo (Kz)</label><input type="number" id="im-buy-rate" min="0" step="0.01" placeholder="ex: 980" oninput="calcIntermediation()"/></div>
+          <div class="field"><label>Câmbio cobrado (Kz)</label><input type="number" id="im-sell-rate" min="0" step="0.01" placeholder="ex: 1020" oninput="calcIntermediation()"/></div>
+          <div class="field"><label>Como foi financiada?</label><select id="im-payment-mode"><option value="cliente_antecipado">Cliente pagou antecipadamente</option><option value="capital_proprio">Paguei com capital próprio</option></select></div>
+          <div class="field"><label>Conta do movimento</label><select id="im-account"><option value="">— Não registar movimento —</option>${db.accounts.map(a => `<option value="${a.id}">${a.name} (${fKz(a.balance)})</option>`).join("")}</select></div>
+          <div class="field full"><label>Destino / carteira do cliente *</label><input id="im-destination" placeholder="Endereço ou identificação da conta do cliente"/></div>
+          <div class="field"><label>Estado</label><select id="im-status"><option value="pendente">Pendente</option><option value="comprado">Comprado</option><option value="enviado">Enviado</option><option value="concluido">Concluído</option></select></div>
+          <div class="field"><label>Resumo</label><div id="im-summary" class="computed">Indica quantidade e câmbios</div></div>
+          <div class="field full"><label>Notas</label><textarea id="im-notes" rows="3" placeholder="Referência, plataforma ou observações"></textarea></div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:20px"><button class="btn-primary" style="flex:1" onclick="saveIntermediation()">GUARDAR INTERMEDIAÇÃO</button><button class="btn-ghost" onclick="closeModal()">CANCELAR</button></div>
+      </div></div>`;
+    }
+
+    window.calcIntermediation = function () {
+      const quantity = Number(document.getElementById("im-quantity")?.value || 0);
+      const buyRate = Number(document.getElementById("im-buy-rate")?.value || 0);
+      const sellRate = Number(document.getElementById("im-sell-rate")?.value || 0);
+      const asset = document.getElementById("im-asset")?.value?.trim() || "activo";
+      const cost = quantity * buyRate;
+      const revenue = quantity * sellRate;
+      const profit = revenue - cost;
+      const summary = document.getElementById("im-summary");
+      if (summary) summary.innerHTML = `${fInterAsset(quantity, asset)} · custo ${fKz(cost)} · cobrado ${fKz(revenue)}<br><strong style="color:${profit >= 0 ? "#50c878" : "#ff5050"}">Lucro: ${fKz(profit)}</strong>`;
+    };
+
+    window.saveIntermediation = async function () {
+      const quantity = Number(document.getElementById("im-quantity")?.value || 0);
+      const buyRate = Number(document.getElementById("im-buy-rate")?.value || 0);
+      const sellRate = Number(document.getElementById("im-sell-rate")?.value || 0);
+      const asset = document.getElementById("im-asset")?.value?.trim().toUpperCase();
+      const accountId = document.getElementById("im-account")?.value || "";
+      const supplier = document.getElementById("im-supplier")?.value?.trim();
+      const paymentMode = document.getElementById("im-payment-mode")?.value;
+      const totalCost = quantity * buyRate;
+      const totalRevenue = quantity * sellRate;
+      if (!asset || quantity <= 0 || buyRate <= 0 || sellRate <= 0) return alert("Preenche activo, quantidade e os dois câmbios.");
+      if (!supplier) return alert("Indica o fornecedor ou plataforma da intermediação.");
+      if (!document.getElementById("im-destination")?.value?.trim()) return alert("Indica o destino ou carteira do cliente.");
+      const account = accountId ? db.accounts.find(a => String(a.id) === String(accountId)) : null;
+      if (account && paymentMode === "capital_proprio" && totalCost > Number(account.balance || 0)) return alert(`Saldo insuficiente em ${account.name}.`);
+      const operation = { id: uid(), date: document.getElementById("im-date")?.value || today(), asset, supplier, quantity, buyRate, sellRate, totalCost, totalRevenue, profit: totalRevenue - totalCost, clientId: document.getElementById("im-client")?.value || null, paymentMode, accountId: accountId || null, destination: document.getElementById("im-destination")?.value?.trim(), status: document.getElementById("im-status")?.value || "pendente", notes: document.getElementById("im-notes")?.value || "", revenueReceived: paymentMode === "cliente_antecipado", movementDelta: 0, createdAt: new Date().toISOString() };
+      const updates = [{ col: "intermediations", item: operation }];
+      if (account) {
+        const delta = paymentMode === "cliente_antecipado" ? totalRevenue : -totalCost;
+        operation.movementDelta = delta;
+        updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) + delta } });
+      }
+      await bulkSave(updates);
+      modal = null;
+      alert("✅ Intermediação registada. Nenhum stock foi alterado.");
+      render();
+    };
+
+    window.receiveIntermediation = async function (id) {
+      const operation = (db.intermediations || []).find(item => String(item.id) === String(id));
+      if (!operation || operation.revenueReceived) return;
+      const account = db.accounts.find(item => String(item.id) === String(operation.accountId));
+      if (!account) return alert("Esta operação não tem conta de recebimento associada.");
+      if (!confirm(`Registar recebimento de ${fKz(operation.totalRevenue)} em ${account.name}?`)) return;
+      await bulkSave([{ col: "accounts", item: { ...account, balance: Number(account.balance || 0) + Number(operation.totalRevenue || 0) } }, { col: "intermediations", item: { ...operation, revenueReceived: true, movementDelta: Number(operation.movementDelta || 0) + Number(operation.totalRevenue || 0) } }]);
+      render();
+    };
+
+    window.updateIntermediationStatus = async function (id, status) {
+      const operation = (db.intermediations || []).find(item => String(item.id) === String(id));
+      if (operation && status !== operation.status) await saveDoc("intermediations", { ...operation, status });
+    };
+    window.deleteIntermediation = async function (id) {
+      const operation = (db.intermediations || []).find(item => String(item.id) === String(id));
+      if (!operation || !confirm("Eliminar esta intermediação? O movimento de conta será revertido.")) return;
+      const account = operation.accountId && db.accounts.find(item => String(item.id) === String(operation.accountId));
+      const updates = [{ col: "intermediations", item: { ...operation, deleted: true } }];
+      if (account && operation.movementDelta) updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) - Number(operation.movementDelta) } });
+      await bulkSave(updates);
+      await delDoc("intermediations", id);
+    };
+
     // ── STOCK ──────────────────────────────────────────────────────────
     function pageStock() {
       const active = db.lots.filter(l => Number(l.remaining || 0) > 0.0001);
@@ -1288,8 +1416,11 @@
             <button class="btn-ghost" onclick="addWallet()">+</button>
           </div>
         </div>
-        <div class="card">
-          <div class="sec-title">Contas em Kwanzas</div>
+         <div class="card">
+           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+             <div class="sec-title" style="margin:0">Contas em Kwanzas</div>
+             <button class="btn-ghost" style="font-size:10px" onclick="openModal('opening-balance')">+ SALDO INICIAL</button>
+           </div>
           ${db.accounts.map(a => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
             <span style="flex:1;font-size:13px;color:#ccc">${a.name} <span class="badge ${a.type === 'pessoal' ? 'gold' : 'silver'}" style="font-size:9px;margin-left:6px">${a.type === 'pessoal' ? 'PESSOAL' : 'NEGÓCIO'}</span></span>
             <input type="number" style="width:130px" value="${a.balance}" onchange="adjAccount('${a.id}',this.value)"/>
@@ -1329,9 +1460,85 @@
             <div style="font-size:10px;color:#555;margin-top:6px">Se o destino for uma conta Pessoal, isto regista automaticamente uma entrada de "Salário" no teu Hub Financeiro.</div>
           </div>
         </div>
-      </div>`;
+       </div>${buildOpeningBalanceModal()}`;
+     }
+    function buildOpeningBalanceModal() {
+      if (modalState?.type !== "opening-balance") return "";
+      return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-title">REGISTAR SALDO INICIAL</div>
+        <div style="font-size:11px;color:#888;line-height:1.7;margin-bottom:14px">Use esta função apenas para os saldos que já existiam antes de voltares a usar o sistema. Não será criado rendimento nem lucro.</div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="field"><label>Tipo de saldo</label>
+            <select id="ob-kind" onchange="toggleOpeningBalanceKind()">
+              <option value="account">Conta em Kz</option>
+              <option value="wallet">Carteira / activo cripto</option>
+            </select>
+          </div>
+          <div class="field" id="ob-account-wrap"><label>Conta</label>
+            <select id="ob-account"><option value="">— Seleccionar —</option>${db.accounts.map(a => `<option value="${a.id}">${a.name} (${fKz(a.balance)})</option>`).join("")}</select>
+          </div>
+          <div class="field" id="ob-wallet-wrap" style="display:none"><label>Carteira</label>
+            <select id="ob-wallet"><option value="">— Seleccionar —</option>${db.wallets.map(w => `<option value="${w.id}">${w.name} (${w.asset || "USDT"})</option>`).join("")}</select>
+          </div>
+          <div class="field"><label id="ob-amount-label">Saldo inicial (Kz)</label><input type="number" id="ob-amount" min="0" step="0.0001" placeholder="ex: 250000"/></div>
+          <div class="field" id="ob-rate-wrap" style="display:none"><label>Câmbio de custo do saldo cripto (Kz)</label><input type="number" id="ob-rate" min="0" step="0.01" placeholder="ex: 1150"/></div>
+          <div class="field"><label>Data de referência</label><input type="date" id="ob-date" value="${today()}"/></div>
+          <div class="field"><label>Notas</label><textarea id="ob-notes" rows="3" placeholder="ex: saldo existente antes de retomar o sistema"></textarea></div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:20px"><button class="btn-primary" style="flex:1" onclick="saveOpeningBalance()">GUARDAR SALDO</button><button class="btn-ghost" onclick="closeModal()">CANCELAR</button></div>
+      </div></div>`;
     }
-    let transferLots = []; // [{uid, lotId, qty}]
+
+    window.toggleOpeningBalanceKind = function () {
+      const isWallet = document.getElementById("ob-kind")?.value === "wallet";
+      const accountWrap = document.getElementById("ob-account-wrap");
+      const walletWrap = document.getElementById("ob-wallet-wrap");
+      const rateWrap = document.getElementById("ob-rate-wrap");
+      const amountLabel = document.getElementById("ob-amount-label");
+      if (accountWrap) accountWrap.style.display = isWallet ? "none" : "block";
+      if (walletWrap) walletWrap.style.display = isWallet ? "block" : "none";
+      if (rateWrap) rateWrap.style.display = isWallet ? "block" : "none";
+      if (amountLabel) amountLabel.textContent = isWallet ? "Quantidade inicial" : "Saldo inicial (Kz)";
+    };
+
+    window.saveOpeningBalance = async function () {
+      const kind = document.getElementById("ob-kind")?.value;
+      const amount = Number(document.getElementById("ob-amount")?.value || 0);
+      const date = document.getElementById("ob-date")?.value || today();
+      const notes = document.getElementById("ob-notes")?.value || "";
+      if (amount <= 0) return alert("Indica um saldo inicial superior a zero.");
+
+      if (kind === "account") {
+        const accountId = document.getElementById("ob-account")?.value;
+        const account = db.accounts.find(a => String(a.id) === String(accountId));
+        if (!account) return alert("Selecciona uma conta.");
+        const id = `account_${account.id}`;
+        const existing = (db.opening_balances || []).find(item => item.id === id);
+        if (existing && Number(account.balance || 0) !== Number(existing.amount || 0)) return alert("Esta conta já tem movimentos depois do saldo inicial. Não substituas o saldo directamente.");
+        await saveDoc("accounts", { ...account, balance: amount });
+        await saveDoc("opening_balances", { id, kind, entityId: String(account.id), amount, date, notes });
+      } else {
+        const walletId = document.getElementById("ob-wallet")?.value;
+        const wallet = db.wallets.find(w => String(w.id) === String(walletId));
+        const rate = Number(document.getElementById("ob-rate")?.value || 0);
+        if (!wallet) return alert("Selecciona uma carteira.");
+        if (rate <= 0) return alert("Indica o câmbio de custo do saldo cripto.");
+        const id = `wallet_${wallet.id}`;
+        const existing = (db.opening_balances || []).find(item => item.id === id);
+        const existingLot = existing && db.lots.find(lot => String(lot.id) === String(existing.lotId));
+        if (existingLot && Number(existingLot.remaining) !== Number(existingLot.usdt)) return alert("Esta carteira já movimentou o saldo inicial. Não o substituas directamente.");
+        const lot = existingLot
+          ? { ...existingLot, usdt: amount, remaining: amount, rateKz: rate, totalKz: amount * rate, date, notes }
+          : { id: uid(), date, supplierName: "Saldo inicial", asset: wallet.asset || "USDT", usdt: amount, rateKz: rate, totalKz: amount * rate, walletId: String(wallet.id), remaining: amount, notes, createdAt: new Date().toISOString() };
+        await saveDoc("lots", lot);
+        await saveDoc("opening_balances", { id, kind, entityId: String(wallet.id), amount, rate, lotId: lot.id, date, notes });
+      }
+      modal = null;
+      alert("✅ Saldo inicial registado sem afectar os rendimentos.");
+      render();
+    };
+
+     let transferLots = []; // [{uid, lotId, qty}]
 
     function pageTransfers() {
       const history = [...db.transfers].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 15);
