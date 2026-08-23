@@ -25,11 +25,11 @@
     };
 
     // ── COLLECTIONS ────────────────────────────────────────────────────
-    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "sales", "lots", "wallets", "accounts", "hub_notes", "clients"];
-    const SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
+    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "sales", "lots", "wallets", "accounts", "hub_notes", "clients", "settings"];
+    const DEFAULT_SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
 
     let app, db_fire, auth, currentUser = null;
-    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [] };
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [], settings: [] };
 
     // ── FIREBASE INIT ──────────────────────────────────────────────────
     async function initAppAndAuth() {
@@ -98,6 +98,10 @@
     const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
+    function currentSplit() {
+      const configured = db.settings?.find(item => item.id === "profit-split");
+      return configured ? { ...DEFAULT_SPLIT, ...configured } : DEFAULT_SPLIT;
+    }
 
     const INCOME_CATS = ["Salário", "Serviços Extras", "Importação", "Táxi", "Outro"];
     const EXPENSE_CATS = ["Alimentação", "Transporte", "Telecomunicações", "Lazer", "Vestuário", "Cota Juventude", "Investimento", "Outro"];
@@ -360,7 +364,7 @@
       </div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-        <div class="sec-title" style="margin:0">💡 Divisão do Lucro por Negócio — 60 · 30 · 10</div>
+         <div class="sec-title" style="margin:0">💡 Divisão do Lucro por Negócio — ${Math.round(currentSplit().reinvest * 100)} · ${Math.round(currentSplit().salary * 100)} · ${Math.round(currentSplit().savings * 100)}</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           ${RP.map(p => `<button class="${resumoPeriod === p.id ? "btn-p" : "btn-ghost"}" style="font-size:10px;padding:6px 12px" onclick="setResumoPeriod('${p.id}')">${p.label}</button>`).join("")}
         </div>
@@ -389,7 +393,7 @@
 
       // Salário vs retirado, baseado no lucro da Kâmbio no período
       const kambioProfitP = db.sales.filter(s => inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
-      const salarioAlocado = kambioProfitP * SPLIT.salary;
+      const salarioAlocado = kambioProfitP * currentSplit().salary;
       const retiradoP = expenseP.reduce((s, x) => s + Number(x.amount || 0), 0);
       const excedente = retiradoP - salarioAlocado;
 
@@ -429,7 +433,7 @@
         <div class="grid2">
           <div>
             <div class="row"><span>Lucro Kâmbio no período</span><span style="color:#c9a84c">${fKz(kambioProfitP)}</span></div>
-            <div class="row"><span>Salário alocado (30%)</span><span style="color:#50c878;font-weight:700">${fKz(salarioAlocado)}</span></div>
+             <div class="row"><span>Salário alocado (${Math.round(currentSplit().salary * 100)}%)</span><span style="color:#50c878;font-weight:700">${fKz(salarioAlocado)}</span></div>
             <div class="row"><span>Total retirado (saídas)</span><span style="color:#ff7850;font-weight:700">${fKz(retiradoP)}</span></div>
           </div>
           <div style="display:flex;align-items:center;justify-content:center">
@@ -1379,13 +1383,13 @@
     }
 
     function splitBox(label, amount, accent) {
-      const reinvest = amount * SPLIT.reinvest, salary = amount * SPLIT.salary, savings = amount * SPLIT.savings;
+      const reinvest = amount * currentSplit().reinvest, salary = amount * currentSplit().salary, savings = amount * currentSplit().savings;
       return `<div class="card">
     <div class="sec-title">${label}</div>
     <div style="font-size:11px;color:#666;margin-bottom:12px">Lucro do período: <span style="color:${accent};font-weight:700">${fKz(amount)}</span></div>
-    <div class="bud-box" style="border-color:#7eb8f7"><div class="bud-label">REINVESTIR (60%)</div><div class="bud-val" style="color:#7eb8f7;font-size:16px">${fKz(reinvest)}</div></div>
-    <div class="bud-box" style="border-color:#50c878"><div class="bud-label">SALÁRIO (30%)</div><div class="bud-val" style="color:#50c878;font-size:16px">${fKz(salary)}</div></div>
-    <div class="bud-box" style="border-color:#c9a84c"><div class="bud-label">POUPANÇA (10%)</div><div class="bud-val" style="color:#c9a84c;font-size:16px">${fKz(savings)}</div></div>
+    <div class="bud-box" style="border-color:#7eb8f7"><div class="bud-label">REINVESTIR (${Math.round(currentSplit().reinvest * 100)}%)</div><div class="bud-val" style="color:#7eb8f7;font-size:16px">${fKz(reinvest)}</div></div>
+    <div class="bud-box" style="border-color:#50c878"><div class="bud-label">SALÁRIO (${Math.round(currentSplit().salary * 100)}%)</div><div class="bud-val" style="color:#50c878;font-size:16px">${fKz(salary)}</div></div>
+    <div class="bud-box" style="border-color:#c9a84c"><div class="bud-label">POUPANÇA (${Math.round(currentSplit().savings * 100)}%)</div><div class="bud-val" style="color:#c9a84c;font-size:16px">${fKz(savings)}</div></div>
   </div>`;
     }
 
@@ -1984,6 +1988,12 @@
       .body {
         padding: 16px
       }
+    }
+
+    @media(max-width:640px) {
+      .modal { width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow-y: auto; padding: 18px; }
+      .tbl { min-width: 700px; }
+      .card { max-width: 100%; }
     }
 
     .login-wrap {

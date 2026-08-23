@@ -31,7 +31,7 @@
     // ══════════════════════════════════════════════════════════════════
 
     const COLLECTIONS = ["lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "settings", "opening_balances"];
-    const SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
+    const DEFAULT_SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
     const DEFAULT_WALLETS = ["RedotPay", "Binance", "Bybit", "Kast", "Grey"];
     const DEFAULT_ACCOUNTS = [
       { name: "BFA", type: "pessoal" },
@@ -176,6 +176,10 @@
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
     const r8 = n => Math.round(Number(n) * 1e8) / 1e8;
+    function currentSplit() {
+      const configured = db.settings?.find(item => item.id === "profit-split");
+      return configured ? { ...DEFAULT_SPLIT, ...configured } : DEFAULT_SPLIT;
+    }
     function findMatchingLot(walletId, asset, rateKz) {
       return db.lots.find(l => String(l.walletId) === String(walletId) && (l.asset || "USDT") === (asset || "USDT") && Number(l.rateKz) === Number(rateKz) && Number(l.remaining) > 0.0001);
     }
@@ -186,6 +190,8 @@
       { id: "sell", "label": "Vender", icon: "↑" },
       { id: "intermediation", "label": "Intermediação", icon: "⇢" },
       { id: "stock", "label": "Stock", icon: "◈" },
+      { id: "network", "label": "Rede de Clientes", icon: "⌘" },
+      { id: "history", "label": "Histórico", icon: "≡" },
       { id: "clients", "label": "Clientes", icon: "◉" },
       { id: "ranking", "label": "Ranking", icon: "★" },
       { id: "affiliates", "label": "Afiliados", icon: "◎" },
@@ -345,6 +351,8 @@
         case "sell": return pageSell();
         case "intermediation": return pageIntermediation();
         case "stock": return pageStock();
+        case "network": return pageNetwork();
+        case "history": return pageHistory();
         case "clients": return pageClients();
         case "ranking": return pageRanking();
         case "affiliates": return pageAffiliates();
@@ -393,7 +401,7 @@
       const stockStr = Object.entries(stockByAsset).map(([a, v]) => fAsset(v, a)).join(" · ") || "0";
       const recent = [...db.sales].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
       const topC = topClientMonth();
-      const suggest = monthP * SPLIT.salary;
+      const suggest = monthP * currentSplit().salary;
 
       return `
   <div class="grid4" style="margin-bottom:20px">
@@ -434,9 +442,9 @@
     <div class="card">
       <div class="sec-title">💡 Dica Financeira</div>
       <div style="font-size:12px;color:#888;margin-bottom:12px">Lucro deste mês: <span style="color:#c9a84c;font-weight:700">${fKz(monthP)}</span></div>
-      <div class="budget-box blue"><div class="budget-label">REINVESTIR (60%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(monthP * SPLIT.reinvest)}</div></div>
-      <div class="budget-box green"><div class="budget-label">SALÁRIO (30%)</div><div class="budget-val" style="color:#50c878">${fKz(suggest)}</div></div>
-      <div class="budget-box gold"><div class="budget-label">POUPANÇA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(monthP * SPLIT.savings)}</div></div>      ${topC ? `<div class="top-client-box">
+      <div class="budget-box blue"><div class="budget-label">REINVESTIR (${Math.round(currentSplit().reinvest * 100)}%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(monthP * currentSplit().reinvest)}</div></div>
+      <div class="budget-box green"><div class="budget-label">SALÁRIO (${Math.round(currentSplit().salary * 100)}%)</div><div class="budget-val" style="color:#50c878">${fKz(suggest)}</div></div>
+      <div class="budget-box gold"><div class="budget-label">POUPANÇA (${Math.round(currentSplit().savings * 100)}%)</div><div class="budget-val" style="color:#c9a84c">${fKz(monthP * currentSplit().savings)}</div></div>      ${topC ? `<div class="top-client-box">
         <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:4px">★ CLIENTE DO MÊS</div>
         <div style="font-weight:700;color:#e8e4d9">${topC.name}</div>
         <div style="font-size:11px;color:#777">${fU(topC.volume)} comprados este mês</div>
@@ -643,6 +651,8 @@
     // ── SELL PAGE ──────────────────────────────────────────────────────
     // ── SELL PAGE ──────────────────────────────────────────────────────
     let clientSearch = "";
+    let sellClientId = "";
+    let sellClientSearch = "";
     let sellAsset = "USDT";
     let sellWalletId = "";
     let sellAllWallets = false;
@@ -659,7 +669,7 @@
       const availLots = getSellAvailLots();
       const rate = parseFloat(document.getElementById("s-rate")?.value) || 0;
       const dateVal = document.getElementById("s-date")?.value || today();
-      const clientVal = document.getElementById("s-client")?.value || "";
+      const clientVal = sellClientId || "";
       const affVal = document.getElementById("s-aff")?.value || "";
       const accountVal = document.getElementById("s-account")?.value || "";
       const notesVal = document.getElementById("s-notes")?.value || "";
@@ -700,13 +710,12 @@
             <div class="field"><label>Quantidade Solicitada pelo Cliente</label><input type="number" id="s-requested" placeholder="ex: 500" value="${requestedVal}" oninput="refreshSell()"/></div>
             <div class="field"><label>Venda rápida por valor (Kz)</label><div style="display:flex;gap:6px"><input type="number" id="s-amount-kz" placeholder="ex: 575000"/><button type="button" class="btn-ghost" onclick="quickSellByValue()">SELECCIONAR</button></div></div>
             <div class="field"><label>Cliente</label>
-              <select id="s-client" onchange="document.getElementById('s-aff').value=''">
-                <option value="">— Seleccionar —</option>
-                ${db.clients.map(c => `<option value="${c.id}" ${String(c.id) === String(clientVal) ? "selected" : ""}>${c.name}</option>`).join("")}
-              </select>
+              <input id="s-client" list="sell-client-options" placeholder="Pesquisar por nome, telefone ou grupo..." value="${db.clients.find(c => String(c.id) === String(clientVal))?.name || sellClientSearch}" oninput="selectSellClient(this.value)"/>
+              <input type="hidden" id="s-client-id" value="${clientVal}"/>
+              <datalist id="sell-client-options">${db.clients.map(c => `<option value="${c.name}">${c.phone || ""}${c.groupName ? ` · ${c.groupName}` : ""}</option>`).join("")}</datalist>
             </div>
             <div class="field"><label>Afiliado</label>
-              <select id="s-aff" onchange="document.getElementById('s-client').value=''">
+              <select id="s-aff" onchange="clearSellClient()">
                 <option value="">— Seleccionar —</option>
                 ${db.affiliates.map(a => `<option value="${a.id}" ${String(a.id) === String(affVal) ? "selected" : ""}>${a.name}</option>`).join("")}
               </select>
@@ -876,6 +885,24 @@
       if (input) input.value = rate;
       refreshSell();
     };
+    window.selectSellClient = function (value) {
+      sellClientSearch = value;
+      const normalized = String(value || "").trim().toLocaleLowerCase("pt");
+      const client = db.clients.find(item => [item.name, item.phone, item.groupName].some(field => String(field || "").trim().toLocaleLowerCase("pt") === normalized));
+      sellClientId = client ? String(client.id) : "";
+      const hidden = document.getElementById("s-client-id");
+      if (hidden) hidden.value = sellClientId;
+      const aff = document.getElementById("s-aff");
+      if (client && aff) aff.value = "";
+    };
+    window.clearSellClient = function () {
+      sellClientId = "";
+      sellClientSearch = "";
+      const input = document.getElementById("s-client");
+      const hidden = document.getElementById("s-client-id");
+      if (input) input.value = "";
+      if (hidden) hidden.value = "";
+    };
     window.quickSellByValue = function () {
       const rate = Number(document.getElementById("s-rate")?.value || 0);
       const amount = Number(document.getElementById("s-amount-kz")?.value || 0);
@@ -900,7 +927,7 @@
     window.submitSell = async function () {
       const date = document.getElementById("s-date")?.value;
       const rateKz = parseFloat(document.getElementById("s-rate")?.value) || 0;
-      const clientId = document.getElementById("s-client")?.value || null;
+      const clientId = document.getElementById("s-client-id")?.value || sellClientId || null;
       const affId = document.getElementById("s-aff")?.value || null;
       const accountId = document.getElementById("s-account")?.value;
       const notes = document.getElementById("s-notes")?.value || "";
@@ -964,6 +991,8 @@
         sellWalletId = "";
         sellAsset = "USDT";
         sellAllWallets = false;
+        sellClientId = "";
+        sellClientSearch = "";
         alert("✅ Venda registada com sucesso!");
         setSubmitLoading(button, false);
         navigate("financial");
@@ -1100,6 +1129,110 @@
       await delDoc("intermediations", id);
     };
 
+    // ── REDE DE CLIENTES ────────────────────────────────────────────────
+    let networkRootId = "";
+    function clientChildren(id) {
+      return db.clients.filter(client => String(client.addedByClientId || "") === String(id));
+    }
+    function networkDescendants(id, seen = new Set()) {
+      if (seen.has(String(id))) return 0;
+      seen.add(String(id));
+      return clientChildren(id).reduce((sum, child) => sum + 1 + networkDescendants(child.id, seen), 0);
+    }
+    function networkNode(client, depth = 0, seen = new Set()) {
+      const id = String(client.id);
+      if (seen.has(id)) return `<li class="network-cycle">⚠ Ciclo detectado em ${client.name}</li>`;
+      const nextSeen = new Set(seen).add(id);
+      const children = clientChildren(id);
+      const sales = db.sales.filter(sale => String(sale.clientId) === id);
+      const volume = sales.reduce((sum, sale) => sum + Number(sale.totalUsdt || 0), 0);
+      return `<li><div class="network-node" style="margin-left:${Math.min(depth, 6) * 16}px" onclick="openModal('view-client','${client.id}')"><strong>${client.name}</strong><span>${children.length} directos · ${networkDescendants(id)} descendentes · ${fU(volume)}</span></div>${children.length ? `<ul>${children.map(child => networkNode(child, depth + 1, nextSeen)).join("")}</ul>` : ""}</li>`;
+    }
+    function networkTreeMarkup() {
+      const roots = networkRootId ? db.clients.filter(client => String(client.id) === String(networkRootId)) : db.clients.filter(client => !client.addedByClientId || !db.clients.some(parent => String(parent.id) === String(client.addedByClientId)));
+      return roots.length ? `<ul class="network-tree">${roots.map(root => networkNode(root)).join("")}</ul>` : '<div class="empty">SEM CLIENTES OU RELAÇÕES VÁLIDAS</div>';
+    }
+    function pageNetwork() {
+      const root = db.clients.find(client => String(client.id) === String(networkRootId));
+      const direct = root ? clientChildren(root.id).length : db.clients.filter(client => !client.addedByClientId).length;
+      const descendants = root ? networkDescendants(root.id) : db.clients.length;
+      return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:10px;flex-wrap:wrap"><div><div class="sec-title" style="margin:0">Rede de Clientes</div><div style="font-size:11px;color:#666;margin-top:5px">Relação dinâmica baseada no indicador guardado em cada cliente.</div></div></div>
+        <div class="card" style="margin-bottom:16px"><div class="form-grid"><div class="field"><label>Pesquisar cliente raiz</label><input id="network-root-search" placeholder="Nome, telefone ou grupo" oninput="filterNetworkRoots(this.value)"/></div><div class="field"><label>Cliente raiz</label><select id="network-root" onchange="selectNetworkRoot(this.value)"><option value="">Todos os clientes sem indicador</option>${db.clients.map(client => `<option value="${client.id}" ${String(client.id) === String(networkRootId) ? "selected" : ""}>${client.name}${client.phone ? ` · ${client.phone}` : ""}</option>`).join("")}</select></div></div><div style="font-size:11px;color:#888;margin-top:10px">${root ? `${root.name}: ${direct} clientes directos · ${descendants} descendentes` : `${db.clients.length} clientes · ${direct} raízes · ${descendants} clientes na rede`}</div></div>
+        <div id="network-tree-wrap" class="card">${networkTreeMarkup()}</div>`;
+    }
+    window.filterNetworkRoots = function (value) {
+      const query = String(value || "").trim().toLocaleLowerCase("pt");
+      const select = document.getElementById("network-root");
+      if (!select) return;
+      select.innerHTML = `<option value="">Todos os clientes sem indicador</option>` + db.clients.filter(client => [client.name, client.phone, client.groupName].some(field => String(field || "").toLocaleLowerCase("pt").includes(query))).map(client => `<option value="${client.id}">${client.name}${client.phone ? ` · ${client.phone}` : ""}</option>`).join("");
+      select.value = networkRootId;
+    };
+    window.selectNetworkRoot = function (id) {
+      networkRootId = id;
+      const wrap = document.getElementById("network-tree-wrap");
+      if (wrap) wrap.innerHTML = networkTreeMarkup();
+    };
+
+    // ── HISTÓRICO FINANCEIRO ────────────────────────────────────────────
+    const historyFilters = { wallet: "", type: "", asset: "", client: "", from: "", to: "" };
+    function historyOperations() {
+      const walletName = id => db.wallets.find(wallet => String(wallet.id) === String(id))?.name || "—";
+      const clientName = id => db.clients.find(client => String(client.id) === String(id))?.name || "—";
+      const operations = [];
+      db.sales.forEach(sale => {
+        const walletIds = [...new Set((sale.lotEntries || []).map(entry => db.lots.find(lot => String(lot.id) === String(entry.lotId))?.walletId).filter(Boolean).map(String))];
+        operations.push({ date: sale.date, type: "Venda", walletIds, wallet: walletIds.map(walletName).join(" / ") || "—", client: clientName(sale.clientId), clientId: sale.clientId || "", asset: sale.asset || "USDT", quantity: sale.totalUsdt, rate: sale.rateKz, value: sale.totalRevenue, result: sale.totalProfit, status: sale.pendingPayment && !sale.pendingPaid ? "Pagamento pendente" : "Concluída" });
+      });
+      db.lots.forEach(lot => operations.push({ date: lot.date, type: "Compra", walletIds: [String(lot.walletId)], wallet: walletName(lot.walletId), client: "—", clientId: "", asset: lot.asset || "USDT", quantity: lot.usdt, rate: lot.rateKz, value: lot.totalKz, result: null, status: "Registada" }));
+      db.transfers.forEach(transfer => operations.push({ date: transfer.date, type: "Transferência", walletIds: [String(transfer.fromId), String(transfer.toId)], wallet: `${walletName(transfer.fromId)} → ${walletName(transfer.toId)}`, client: "—", clientId: "", asset: transfer.asset || "USDT", quantity: transfer.amount, rate: null, value: null, result: null, status: "Registada" }));
+      (db.intermediations || []).forEach(item => operations.push({ date: item.date, type: "Intermediação", walletIds: [], wallet: "Directo ao cliente", client: clientName(item.clientId), clientId: item.clientId || "", asset: item.asset, quantity: item.quantity, rate: item.sellRate, value: item.totalRevenue, result: item.profit, status: INTERMEDIATION_STATUS[item.status]?.[0] || item.status }));
+      (db.opening_balances || []).forEach(item => operations.push({ date: item.date, type: "Saldo inicial", walletIds: item.kind === "wallet" ? [String(item.entityId)] : [], wallet: item.kind === "wallet" ? walletName(item.entityId) : "Conta em Kz", client: "—", clientId: "", asset: item.kind === "wallet" ? db.wallets.find(wallet => String(wallet.id) === String(item.entityId))?.asset || "USDT" : "Kz", quantity: item.amount, rate: item.rate || null, value: item.kind === "wallet" ? Number(item.amount) * Number(item.rate || 0) : item.amount, result: null, status: "Inicial" }));
+      return operations.sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+    function filteredHistory() {
+      const f = historyFilters;
+      return historyOperations().filter(operation => (!f.wallet || operation.walletIds.includes(String(f.wallet))) && (!f.type || operation.type === f.type) && (!f.asset || operation.asset === f.asset) && (!f.client || operation.client.toLocaleLowerCase("pt").includes(f.client.toLocaleLowerCase("pt"))) && (!f.from || operation.date >= f.from) && (!f.to || operation.date <= f.to));
+    }
+    function historyTable() {
+      const rows = filteredHistory();
+      if (!rows.length) return '<div class="empty">SEM OPERAÇÕES PARA ESTES FILTROS</div>';
+      return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Data</th><th>Tipo</th><th>Carteira</th><th>Cliente</th><th>Activo</th><th>Quantidade</th><th>Taxa</th><th>Valor</th><th>Resultado</th><th>Estado</th></tr></thead><tbody>${rows.map(operation => `<tr><td>${fDate(operation.date)}</td><td>${operation.type}</td><td>${operation.wallet}</td><td>${operation.client}</td><td style="color:#c084fc">${operation.asset}</td><td>${fInterAsset(operation.quantity, operation.asset)}</td><td>${operation.rate ? `${Number(operation.rate).toLocaleString("pt-AO")} Kz` : "—"}</td><td>${operation.value === null ? "—" : fKz(operation.value)}</td><td style="color:${operation.result === null ? "#777" : Number(operation.result) >= 0 ? "#50c878" : "#ff5050"}">${operation.result === null ? "—" : fKz(operation.result)}</td><td>${operation.status}</td></tr>`).join("")}</tbody></table></div>`;
+    }
+    function historyAnalytics() {
+      const sales = filteredHistory().filter(operation => operation.type === "Venda");
+      const volume = sales.reduce((sum, operation) => sum + Number(operation.quantity || 0), 0);
+      const clients = new Set(sales.map(operation => operation.clientId).filter(Boolean)).size;
+      const byWallet = {};
+      const clientsByWallet = {};
+      sales.forEach(operation => operation.walletIds.forEach(id => {
+        byWallet[id] = (byWallet[id] || 0) + Number(operation.quantity || 0) / Math.max(operation.walletIds.length, 1);
+        if (!clientsByWallet[id]) clientsByWallet[id] = new Set();
+        if (operation.clientId) clientsByWallet[id].add(String(operation.clientId));
+      }));
+      const ranking = Object.entries(byWallet).sort((a, b) => b[1] - a[1]);
+      const max = ranking[0]?.[1] || 1;
+      const clientRanking = Object.entries(clientsByWallet).sort((a, b) => b[1].size - a[1].size);
+      return `<div class="grid3" style="margin-bottom:16px">${statCard("Volume vendido", fInterAsset(volume, "USDT"), "#7eb8f7", "↑")}${statCard("Clientes", clients, "#c9a84c", "◉")}${statCard("Operações", filteredHistory().length, "#50c878", "≡")}</div><div class="grid2"><div class="card"><div class="sec-title">Desempenho — volume vendido</div>${ranking.length ? ranking.map(([id, value]) => `<div style="display:flex;align-items:center;gap:10px;margin:10px 0"><span style="width:130px">${db.wallets.find(wallet => String(wallet.id) === String(id))?.name || "—"}</span><div style="flex:1;background:#1a1a2e;height:8px"><div style="height:100%;width:${value / max * 100}%;background:#50c878"></div></div><strong>${fU(value)}</strong></div>`).join("") : '<div class="empty">SEM VENDAS PARA ANALISAR</div>'}</div><div class="card"><div class="sec-title">Desempenho — clientes únicos</div>${clientRanking.length ? clientRanking.map(([id, value]) => `<div class="row"><span>${db.wallets.find(wallet => String(wallet.id) === String(id))?.name || "—"}</span><strong style="color:#c9a84c">${value.size}</strong></div>`).join("") : '<div class="empty">SEM CLIENTES PARA ANALISAR</div>'}</div></div>`;
+    }
+    function pageHistory() {
+      historyFilters.wallet = document.getElementById("history-wallet")?.value || historyFilters.wallet;
+      historyFilters.type = document.getElementById("history-type")?.value || historyFilters.type;
+      historyFilters.asset = document.getElementById("history-asset")?.value || historyFilters.asset;
+      historyFilters.client = document.getElementById("history-client")?.value || historyFilters.client;
+      historyFilters.from = document.getElementById("history-from")?.value || historyFilters.from;
+      historyFilters.to = document.getElementById("history-to")?.value || historyFilters.to;
+      const assets = [...new Set(historyOperations().map(operation => operation.asset).filter(Boolean))];
+      return `<div class="sec-title">Histórico Financeiro</div><div class="card history-filters" style="margin:14px 0"><div class="form-grid"><div class="field"><label>Carteira</label><select id="history-wallet" onchange="applyHistoryFilters()"><option value="">Todas</option>${db.wallets.map(wallet => `<option value="${wallet.id}" ${String(wallet.id) === String(historyFilters.wallet) ? "selected" : ""}>${wallet.name}</option>`).join("")}</select></div><div class="field"><label>Tipo</label><select id="history-type" onchange="applyHistoryFilters()"><option value="">Todos</option>${["Venda", "Compra", "Transferência", "Intermediação", "Saldo inicial"].map(type => `<option ${historyFilters.type === type ? "selected" : ""}>${type}</option>`).join("")}</select></div><div class="field"><label>Activo</label><select id="history-asset" onchange="applyHistoryFilters()"><option value="">Todos</option>${assets.map(asset => `<option ${historyFilters.asset === asset ? "selected" : ""}>${asset}</option>`).join("")}</select></div><div class="field"><label>Cliente</label><input id="history-client" value="${historyFilters.client}" oninput="applyHistoryFilters()" placeholder="Pesquisar..."/></div><div class="field"><label>De</label><input type="date" id="history-from" value="${historyFilters.from}" onchange="applyHistoryFilters()"/></div><div class="field"><label>Até</label><input type="date" id="history-to" value="${historyFilters.to}" onchange="applyHistoryFilters()"/></div></div><button class="btn-ghost" onclick="clearHistoryFilters()">LIMPAR FILTROS</button></div><div id="history-analytics">${historyAnalytics()}</div><div id="history-table-wrap" class="card">${historyTable()}</div>`;
+    }
+    window.applyHistoryFilters = function () {
+      ["wallet", "type", "asset", "client", "from", "to"].forEach(key => { historyFilters[key] = document.getElementById(`history-${key}`)?.value || ""; });
+      const table = document.getElementById("history-table-wrap");
+      const analytics = document.getElementById("history-analytics");
+      if (table) table.innerHTML = historyTable();
+      if (analytics) analytics.innerHTML = historyAnalytics();
+    };
+    window.clearHistoryFilters = function () { Object.keys(historyFilters).forEach(key => { historyFilters[key] = ""; }); render(); };
+
     // ── STOCK ──────────────────────────────────────────────────────────
     function pageStock() {
       const active = db.lots.filter(l => Number(l.remaining || 0) > 0.0001);
@@ -1184,12 +1317,13 @@
         const ss = db.sales.filter(s => String(s.clientId) === String(c.id));
         const vol = ss.reduce((a, s) => a + Number(s.totalUsdt || 0), 0);
         const prf = ss.reduce((a, s) => a + Number(s.totalProfit || 0), 0);
+        const referrer = db.clients.find(x => String(x.id) === String(c.addedByClientId));
         return `<tr>
           <td style="color:#555">${idx + 1}</td>
           <td style="font-weight:700;color:#e8e4d9;cursor:pointer;text-decoration:underline;text-decoration-style:dotted" onclick="openModal('view-client','${c.id}')">${c.name}</td>
           <td style="color:#777">${c.phone || "—"}</td>
           <td style="color:#7eb8f7">${c.groupName || "—"}</td>
-          <td style="color:#777">${c.addedBy || "—"}</td>
+          <td style="color:#777">${referrer?.name || c.addedBy || "Administrador"}</td>
           <td style="color:#555;font-size:11px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(c.walletIds || []).join(", ") || "—"}</td>
           <td style="color:#c9a84c">${ss.length}</td>
           <td style="color:#7eb8f7">${fU(vol)}</td>
@@ -1252,7 +1386,7 @@
         <div class="field" style="margin-bottom:12px"><label>Nome *</label><input id="nc-name" placeholder="Nome completo" value="${editing?.name || ""}"/></div>
         <div class="field" style="margin-bottom:12px"><label>Telefone / WhatsApp</label><input id="nc-phone" placeholder="+244 9XX XXX XXX" value="${editing?.phone || ""}"/></div>
         <div class="field" style="margin-bottom:12px"><label>Nome do Grupo</label><input id="nc-group" placeholder="ex: Grupo VIP Luanda" value="${editing?.groupName || ""}"/></div>
-        <div class="field" style="margin-bottom:12px"><label>Quem Adicionou ao Grupo</label><input id="nc-addedby" placeholder="ex: Ivandro / Nome do Afiliado" value="${editing?.addedBy || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>Adicionado por</label><input id="nc-addedby-search" list="nc-referrer-options" placeholder="Pesquisar cliente..." value="${db.clients.find(c => String(c.id) === String(editing?.addedByClientId))?.name || editing?.addedBy || ""}" oninput="selectAddedBy(this.value)"/><input type="hidden" id="nc-addedby" value="${editing?.addedByClientId || ""}"/><datalist id="nc-referrer-options">${db.clients.filter(c => String(c.id) !== String(editing?.id || "")).map(c => `<option value="${c.name}">${c.phone || ""}</option>`).join("")}<option value="Administrador / Sistema"></option></datalist></div>
         <div class="field" style="margin-bottom:12px"><label>Carteira Preferida (para receber pagamentos)</label>
           <select id="nc-prefwallet">
             <option value="">— Nenhuma —</option>
@@ -1272,17 +1406,40 @@
       const name = document.getElementById("nc-name")?.value?.trim();
       if (!name) return alert("Nome obrigatório.");
       const id = modalState?.editId || uid();
+      const normalize = value => String(value || "").trim().toLocaleLowerCase("pt").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+      const phone = document.getElementById("nc-phone")?.value || "";
+      const normalizedName = normalize(name);
+      const normalizedPhone = phone.replace(/\D/g, "");
+      const duplicate = db.clients.find(client => String(client.id) !== String(id) && (normalize(client.name) === normalizedName || (normalizedPhone && client.phone?.replace(/\D/g, "") === normalizedPhone)));
+      if (duplicate) return alert(`Cliente duplicado: ${duplicate.name}. Verifica o nome ou telefone antes de guardar.`);
       const walletIds = (document.getElementById("nc-wallets")?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+      const addedByClientId = document.getElementById("nc-addedby")?.value || "";
+      if (String(addedByClientId) === String(id)) return alert("Um cliente não pode ser o seu próprio indicador.");
+      let parentId = addedByClientId;
+      const visited = new Set();
+      while (parentId) {
+        if (visited.has(String(parentId)) || String(parentId) === String(id)) return alert("Esta relação criaria um ciclo na rede de clientes.");
+        visited.add(String(parentId));
+        parentId = db.clients.find(client => String(client.id) === String(parentId))?.addedByClientId || "";
+      }
       await saveDoc("clients", {
         id, name,
-        phone: document.getElementById("nc-phone")?.value || "",
+        phone,
         groupName: document.getElementById("nc-group")?.value || "",
-        addedBy: document.getElementById("nc-addedby")?.value || "",
+        addedByClientId: addedByClientId || null,
         preferredWalletId: document.getElementById("nc-prefwallet")?.value || "",
         walletIds,
         notes: document.getElementById("nc-notes")?.value || ""
       });
       closeModal();
+    };
+    window.selectAddedBy = function (value) {
+      const input = document.getElementById("nc-addedby-search");
+      const hidden = document.getElementById("nc-addedby");
+      const normalized = String(value || "").trim().toLocaleLowerCase("pt");
+      const client = db.clients.find(item => item.name?.trim().toLocaleLowerCase("pt") === normalized);
+      if (hidden) hidden.value = client ? client.id : "";
+      if (input && value === "Administrador / Sistema") input.value = value;
     };
 
     // ── RANKING ────────────────────────────────────────────────────────
@@ -1798,9 +1955,9 @@
         <div class="card">
           <div class="sec-title">💰 Gestão do Lucro</div>
           <div style="font-size:12px;color:#666;margin-bottom:16px">Lucro de <span style="color:#c9a84c">${fKz(profit)}</span>:</div>
-          <div class="budget-box blue"><div class="budget-label">REINVESTIR (60%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(profit * SPLIT.reinvest)}</div><div style="font-size:10px;color:#444;margin-top:4px">Aumenta o capital de giro</div></div>
-          <div class="budget-box green"><div class="budget-label">SALÁRIO (30%)</div><div class="budget-val" style="color:#50c878">${fKz(profit * SPLIT.salary)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
-          <div class="budget-box gold"><div class="budget-label">POUPANÇA (10%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit * SPLIT.savings)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>    </div>
+          <div class="budget-box blue"><div class="budget-label">REINVESTIR (${Math.round(currentSplit().reinvest * 100)}%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(profit * currentSplit().reinvest)}</div><div style="font-size:10px;color:#444;margin-top:4px">Aumenta o capital de giro</div></div>
+          <div class="budget-box green"><div class="budget-label">SALÁRIO (${Math.round(currentSplit().salary * 100)}%)</div><div class="budget-val" style="color:#50c878">${fKz(profit * currentSplit().salary)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
+          <div class="budget-box gold"><div class="budget-label">POUPANÇA (${Math.round(currentSplit().savings * 100)}%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit * currentSplit().savings)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>    </div>
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
             <div class="sec-title" style="margin:0">Vendas do Período</div>
@@ -1870,7 +2027,17 @@
                <input type="number" id="stock-minimum" min="0" step="0.0001" value="${getStockMinimum() || ""}" placeholder="0 = desactivado" style="flex:1"/>
                <button class="btn-ghost" onclick="saveStockMinimum()">GUARDAR</button>
              </div>
-             <div style="font-size:10px;color:#555;margin-top:6px">Aplica a cada activo individualmente.</div>
+            <div style="font-size:10px;color:#555;margin-top:6px">Aplica a cada activo individualmente.</div>
+           </div>
+           <div style="border-top:1px solid #1a1a2e;margin-top:14px;padding-top:14px">
+             <div class="sec-title" style="font-size:11px">Divisão do Lucro</div>
+             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+               <input type="number" id="split-reinvest" min="0" max="100" step="1" value="${Math.round(currentSplit().reinvest * 100)}" placeholder="Reinvestir %"/>
+               <input type="number" id="split-salary" min="0" max="100" step="1" value="${Math.round(currentSplit().salary * 100)}" placeholder="Salário %"/>
+               <input type="number" id="split-savings" min="0" max="100" step="1" value="${Math.round(currentSplit().savings * 100)}" placeholder="Poupança %"/>
+             </div>
+             <button class="btn-ghost" style="margin-top:8px;width:100%" onclick="saveProfitSplit()">GUARDAR DIVISÃO</button>
+             <div style="font-size:10px;color:#555;margin-top:6px">Os valores devem somar exactamente 100%. Padrão: 60/30/10.</div>
            </div>
          </div>
           <div style="margin-top:16px;padding:12px;background:#0b0b14;border:1px solid #1c1c2e;border-radius:2px">
@@ -1990,6 +2157,13 @@
       const value = Math.max(0, Number(document.getElementById("stock-minimum")?.value || 0));
       await saveDoc("settings", { id: "stock-minimum", value });
       alert("✅ Mínimo de stock guardado.");
+    };
+
+    window.saveProfitSplit = async function () {
+      const values = ["reinvest", "salary", "savings"].map(key => Number(document.getElementById(`split-${key}`)?.value || 0));
+      if (values.some(value => value < 0 || value > 100) || Math.abs(values.reduce((sum, value) => sum + value, 0) - 100) > 0.001) return alert("A divisão deve ter valores entre 0 e 100 e somar exactamente 100%.");
+      await saveDoc("settings", { id: "profit-split", reinvest: values[0] / 100, salary: values[1] / 100, savings: values[2] / 100, updatedAt: new Date().toISOString() });
+      alert("✅ Regra de divisão guardada.");
     };
 
     function statCard(label, value, color, icon) {
@@ -2517,6 +2691,13 @@
       }
     }
 
+    @media(max-width:640px) {
+      .modal { width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow-y: auto; padding: 18px; }
+      .network-node { flex-direction: column; gap: 5px; }
+      .tbl { min-width: 760px; }
+      .card { max-width: 100%; }
+    }
+
     .login-wrap {
       min-height: 100vh;
       display: flex;
@@ -2534,6 +2715,12 @@
       max-width: 340px;
       border-radius: 2px
     }
+    .network-tree, .network-tree ul { list-style: none; padding-left: 0; }
+    .network-tree ul { border-left: 1px solid #2a2a3c; margin-left: 18px; padding-left: 12px; }
+    .network-node { display: flex; justify-content: space-between; gap: 12px; padding: 10px; margin: 6px 0; background: #11111d; border: 1px solid #25253a; cursor: pointer; }
+    .network-node span { color: #777; font-size: 10px; }
+    .network-cycle { color: #ff5050; padding: 8px; font-size: 11px; }
+    button, input, select, textarea { min-height: 38px; }
   </style>
 </head>
 
