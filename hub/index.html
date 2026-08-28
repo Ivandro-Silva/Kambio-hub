@@ -98,9 +98,10 @@
     const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
-    function currentSplit() {
-      const configured = db.settings?.find(item => item.id === "profit-split");
-      return configured ? { ...DEFAULT_SPLIT, ...configured } : DEFAULT_SPLIT;
+    function currentSplit(business = "global") {
+      const configured = db.settings?.find(item => item.id === "profit-splits") || db.settings?.find(item => item.id === "profit-split");
+      const selected = configured?.[business] || configured?.global || (configured?.id === "profit-split" ? configured : null);
+      return selected ? { ...DEFAULT_SPLIT, ...selected } : DEFAULT_SPLIT;
     }
 
     const INCOME_CATS = ["Salário", "Serviços Extras", "Importação", "Táxi", "Outro"];
@@ -320,7 +321,7 @@
       const custodiaAtiva = custodia - custodiaDevolvido;
 
       const RP = [{ id: "today", label: "HOJE" }, { id: "week", label: "SEMANA" }, { id: "month", label: "MÊS" }, { id: "year", label: "ANO" }, { id: "all", label: "TUDO" }];
-      const kambioProfitP = db.sales.filter(s => inPeriod(s.date, resumoPeriod)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+       const kambioProfitP = db.sales.filter(s => (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, resumoPeriod)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
       const taxiInP = db.hub_taxi.filter(x => inPeriod(x.date, resumoPeriod)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiCostP = db.hub_taxi_costs.filter(x => inPeriod(x.date, resumoPeriod)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiLiquidP = taxiInP - taxiCostP;
@@ -370,9 +371,9 @@
         </div>
       </div>
       <div class="grid3">
-        ${splitBox("Kâmbio Business", kambioProfitP, "#7eb8f7")}
-        ${splitBox("Táxi", taxiLiquidP, "#c084fc")}
-        ${splitBox("Importação", importProfitP, "#50c878")}
+         ${splitBox("Kâmbio Business", kambioProfitP, "#7eb8f7", "kambio")}
+         ${splitBox("Táxi", taxiLiquidP, "#c084fc", "taxi")}
+         ${splitBox("Importação", importProfitP, "#50c878", "importacao")}
       </div>`;
     }
 
@@ -392,8 +393,8 @@
       const bankBalance = db.accounts.filter(a => a.type === "pessoal" && a.name !== "Dinheiro em Mãos").reduce((s, a) => s + Number(a.balance || 0), 0);
 
       // Salário vs retirado, baseado no lucro da Kâmbio no período
-      const kambioProfitP = db.sales.filter(s => inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
-      const salarioAlocado = kambioProfitP * currentSplit().salary;
+       const kambioProfitP = db.sales.filter(s => (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+       const salarioAlocado = kambioProfitP * currentSplit("kambio").salary;
       const retiradoP = expenseP.reduce((s, x) => s + Number(x.amount || 0), 0);
       const excedente = retiradoP - salarioAlocado;
 
@@ -636,7 +637,7 @@
             </div>
           </div>
 
-      ${modal === "taxi-in" ? modalForm("RECEITA DO TÁXI", "taxi-in", [
+      ${modal === "taxi-in" ? modalForm("RECEITA DO TÁXI", "taxi_in", [
         { id: "date", label: "Data", type: "date", val: today() },
         { id: "type", label: "Tipo", type: "select", opts: ["Diária (15.000 Kz)", "Manutenção (reserva)", "Caixa Segurança", "Pagamento Motorista", "Outro"] },
         { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 15000" },
@@ -647,7 +648,7 @@
         await saveDoc("hub_taxi", { id: uid(), date: d, type: t, amount: a, notes: n });
         modal = null; render();
       }) : ""}
-      ${modal === "taxi-cost" ? modalForm("CUSTO DO TÁXI", "taxi-cost", [
+      ${modal === "taxi-cost" ? modalForm("CUSTO DO TÁXI", "taxi_cost", [
         { id: "date", label: "Data", type: "date", val: today() },
         { id: "category", label: "Categoria", type: "select", opts: COST_CATS },
         { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 50000" },
@@ -1271,6 +1272,12 @@
     };
 
     function pageDefinicoes() {
+      const splitRows = [
+        ["global", "Padrão global"],
+        ["kambio", "Kâmbio Business"],
+        ["taxi", "Táxi"],
+        ["importacao", "Importação"],
+      ];
       return `
       <div class="card" style="max-width:700px;margin:0 auto">
         <div class="sec-title">📝 Notas & Ideias de Melhorias</div>
@@ -1279,6 +1286,12 @@
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
           <div style="font-size:10px;color:#555">${db.hub_notes[0]?.updatedAt ? "Última atualização: " + new Date(db.hub_notes[0].updatedAt).toLocaleString("pt-AO") : "Ainda sem notas guardadas"}</div>
           <button class="btn-p" onclick="saveHubNotes()">GUARDAR NOTAS</button>
+        </div>
+        <div style="border-top:1px solid #1a1a2e;margin-top:16px;padding-top:16px">
+          <div class="sec-title">Divisão de lucro por negócio</div>
+          <div style="font-size:11px;color:#666;margin-bottom:12px">Cada negócio pode usar uma divisão própria. Todos os valores devem somar 100%.</div>
+          ${splitRows.map(([key, label]) => { const split = currentSplit(key); return `<div style="display:grid;grid-template-columns:1.2fr repeat(3,1fr);gap:8px;align-items:center;margin-bottom:8px"><span style="font-size:11px;color:#aaa">${label}</span><input type="number" id="split-${key}-reinvest" min="0" max="100" value="${Math.round(split.reinvest * 100)}" placeholder="Reinvestir"/><input type="number" id="split-${key}-salary" min="0" max="100" value="${Math.round(split.salary * 100)}" placeholder="Retirada"/><input type="number" id="split-${key}-savings" min="0" max="100" value="${Math.round(split.savings * 100)}" placeholder="Reserva"/></div>`; }).join("")}
+          <button class="btn-p" onclick="saveBusinessSplits()">GUARDAR DIVISÕES</button>
         </div>
       </div>`;
     }
@@ -1382,14 +1395,15 @@
   </div>`;
     }
 
-    function splitBox(label, amount, accent) {
-      const reinvest = amount * currentSplit().reinvest, salary = amount * currentSplit().salary, savings = amount * currentSplit().savings;
+    function splitBox(label, amount, accent, business = "global") {
+      const split = currentSplit(business);
+      const reinvest = amount * split.reinvest, salary = amount * split.salary, savings = amount * split.savings;
       return `<div class="card">
     <div class="sec-title">${label}</div>
     <div style="font-size:11px;color:#666;margin-bottom:12px">Lucro do período: <span style="color:${accent};font-weight:700">${fKz(amount)}</span></div>
-    <div class="bud-box" style="border-color:#7eb8f7"><div class="bud-label">REINVESTIR (${Math.round(currentSplit().reinvest * 100)}%)</div><div class="bud-val" style="color:#7eb8f7;font-size:16px">${fKz(reinvest)}</div></div>
-    <div class="bud-box" style="border-color:#50c878"><div class="bud-label">SALÁRIO (${Math.round(currentSplit().salary * 100)}%)</div><div class="bud-val" style="color:#50c878;font-size:16px">${fKz(salary)}</div></div>
-    <div class="bud-box" style="border-color:#c9a84c"><div class="bud-label">POUPANÇA (${Math.round(currentSplit().savings * 100)}%)</div><div class="bud-val" style="color:#c9a84c;font-size:16px">${fKz(savings)}</div></div>
+    <div class="bud-box" style="border-color:#7eb8f7"><div class="bud-label">REINVESTIR (${Math.round(split.reinvest * 100)}%)</div><div class="bud-val" style="color:#7eb8f7;font-size:16px">${fKz(reinvest)}</div></div>
+    <div class="bud-box" style="border-color:#50c878"><div class="bud-label">SALÁRIO (${Math.round(split.salary * 100)}%)</div><div class="bud-val" style="color:#50c878;font-size:16px">${fKz(salary)}</div></div>
+    <div class="bud-box" style="border-color:#c9a84c"><div class="bud-label">POUPANÇA (${Math.round(split.savings * 100)}%)</div><div class="bud-val" style="color:#c9a84c;font-size:16px">${fKz(savings)}</div></div>
   </div>`;
     }
 
@@ -1514,8 +1528,19 @@
 
     window.saveHubNotes = async function () {
       const text = document.getElementById("hub-notes-text")?.value || "";
-      await saveDoc("hub_notes", { id: "main", text, updatedAt: new Date().toISOString() });
+      await saveDoc("hub_notes", { id: "main", text, updatedAt: new Date().toISOString(), origin: "hub" });
       alert("✅ Notas guardadas!");
+    };
+    window.saveBusinessSplits = async function () {
+      const businesses = ["global", "kambio", "taxi", "importacao"];
+      const splits = {};
+      for (const business of businesses) {
+        const values = ["reinvest", "salary", "savings"].map(key => Number(document.getElementById(`split-${business}-${key}`)?.value || 0));
+        if (values.some(value => value < 0 || value > 100) || Math.abs(values.reduce((sum, value) => sum + value, 0) - 100) > 0.001) return alert(`A divisão de ${business} deve somar exactamente 100%.`);
+        splits[business] = { reinvest: values[0] / 100, salary: values[1] / 100, savings: values[2] / 100 };
+      }
+      await saveDoc("settings", { id: "profit-splits", ...splits, updatedAt: new Date().toISOString() });
+      alert("✅ Divisões por negócio guardadas.");
     };
 
     initAppAndAuth();

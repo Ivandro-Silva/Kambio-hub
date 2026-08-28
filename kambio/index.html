@@ -11,7 +11,7 @@
   <!-- Firebase SDK -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, setDoc, deleteDoc, onSnapshot }
+    import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, setDoc, writeBatch, deleteDoc, onSnapshot }
       from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
     import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut }
       from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -30,7 +30,7 @@
     };
     // ══════════════════════════════════════════════════════════════════
 
-    const COLLECTIONS = ["lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "settings", "opening_balances"];
+    const COLLECTIONS = ["lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
     const DEFAULT_SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
     const DEFAULT_WALLETS = ["RedotPay", "Binance", "Bybit", "Kast", "Grey"];
     const DEFAULT_ACCOUNTS = [
@@ -42,7 +42,7 @@
       { name: "É-Kwanza", type: "negocio" },
     ];
     let app, db_fire, auth, currentUser = null;
-    let db = { lots: [], sales: [], intermediations: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], settings: [], opening_balances: [] };
+    let db = { lots: [], sales: [], intermediations: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], hub_notes: [], settings: [], opening_balances: [] };
     let unsubscribers = [];
 
     // ── LOCAL FALLBACK (quando Firebase não está configurado) ──────────
@@ -119,24 +119,40 @@
     }
 
     async function bulkSave(updates) {
-      // updates: [{col, item}]
-      for (const u of updates) await saveDoc(u.col, u.item);
+      // O batch garante que operações relacionadas não ficam parcialmente gravadas.
+      if (!isConfigured()) {
+        for (const u of updates) await saveDoc(u.col, u.item);
+        return;
+      }
+      const batch = writeBatch(db_fire);
+      updates.forEach(({ col, item }) => {
+        const id = item.id ? String(item.id) : String(Date.now());
+        batch.set(doc(db_fire, col, id), { ...item, id });
+      });
+      await batch.commit();
     }
 
     // ── SEED DEFAULTS ──────────────────────────────────────────────────
     let seeded = false;
+    let seedingDefaults = false;
 
     async function seedDefaults() {
-      if (seeded) return;
-      if (db.wallets.length === 0) {
-        for (const [i, n] of DEFAULT_WALLETS.entries())
-          await saveDoc("wallets", { id: i + 1, name: n, balance: 0, asset: "USDT" });
+      if (seeded || seedingDefaults || db.settings?.some(item => item.id === "defaults_initialized")) return;
+      seedingDefaults = true;
+      try {
+        if (db.wallets.length === 0) {
+          for (const [i, n] of DEFAULT_WALLETS.entries())
+            await saveDoc("wallets", { id: i + 1, name: n, balance: 0, asset: "USDT" });
+        }
+        if (db.accounts.length === 0) {
+          for (const [i, a] of DEFAULT_ACCOUNTS.entries())
+            await saveDoc("accounts", { id: i + 1, name: a.name, balance: 0, type: a.type });
+        }
+        await saveDoc("settings", { id: "defaults_initialized", initializedAt: new Date().toISOString() });
+        seeded = true;
+      } finally {
+        seedingDefaults = false;
       }
-      if (db.accounts.length === 0) {
-        for (const [i, a] of DEFAULT_ACCOUNTS.entries())
-          await saveDoc("accounts", { id: i + 1, name: a.name, balance: 0, type: a.type });
-      }
-      seeded = true;
     }
 
     // ── STATUS INDICATOR ───────────────────────────────────────────────
@@ -176,10 +192,12 @@
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
     const r8 = n => Math.round(Number(n) * 1e8) / 1e8;
-    function currentSplit() {
-      const configured = db.settings?.find(item => item.id === "profit-split");
-      return configured ? { ...DEFAULT_SPLIT, ...configured } : DEFAULT_SPLIT;
+    function currentSplit(business = "kambio") {
+      const configured = db.settings?.find(item => item.id === "profit-splits") || db.settings?.find(item => item.id === "profit-split");
+      const selected = configured?.[business] || configured?.global || (configured?.id === "profit-split" ? configured : null);
+      return selected ? { ...DEFAULT_SPLIT, ...selected } : DEFAULT_SPLIT;
     }
+    function sharedNotes() { return db.hub_notes?.length ? db.hub_notes : db.notes || []; }
     function findMatchingLot(walletId, asset, rateKz) {
       return db.lots.find(l => String(l.walletId) === String(walletId) && (l.asset || "USDT") === (asset || "USDT") && Number(l.rateKz) === Number(rateKz) && Number(l.remaining) > 0.0001);
     }
@@ -401,7 +419,7 @@
       const stockStr = Object.entries(stockByAsset).map(([a, v]) => fAsset(v, a)).join(" · ") || "0";
       const recent = [...db.sales].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
       const topC = topClientMonth();
-      const suggest = monthP * currentSplit().salary;
+      const suggest = monthP * currentSplit("kambio").salary;
 
       return `
   <div class="grid4" style="margin-bottom:20px">
@@ -442,9 +460,9 @@
     <div class="card">
       <div class="sec-title">💡 Dica Financeira</div>
       <div style="font-size:12px;color:#888;margin-bottom:12px">Lucro deste mês: <span style="color:#c9a84c;font-weight:700">${fKz(monthP)}</span></div>
-      <div class="budget-box blue"><div class="budget-label">REINVESTIR (${Math.round(currentSplit().reinvest * 100)}%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(monthP * currentSplit().reinvest)}</div></div>
-      <div class="budget-box green"><div class="budget-label">SALÁRIO (${Math.round(currentSplit().salary * 100)}%)</div><div class="budget-val" style="color:#50c878">${fKz(suggest)}</div></div>
-      <div class="budget-box gold"><div class="budget-label">POUPANÇA (${Math.round(currentSplit().savings * 100)}%)</div><div class="budget-val" style="color:#c9a84c">${fKz(monthP * currentSplit().savings)}</div></div>      ${topC ? `<div class="top-client-box">
+      <div class="budget-box blue"><div class="budget-label">REINVESTIR (${Math.round(currentSplit("kambio").reinvest * 100)}%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(monthP * currentSplit("kambio").reinvest)}</div></div>
+      <div class="budget-box green"><div class="budget-label">SALÁRIO (${Math.round(currentSplit("kambio").salary * 100)}%)</div><div class="budget-val" style="color:#50c878">${fKz(suggest)}</div></div>
+      <div class="budget-box gold"><div class="budget-label">POUPANÇA (${Math.round(currentSplit("kambio").savings * 100)}%)</div><div class="budget-val" style="color:#c9a84c">${fKz(monthP * currentSplit("kambio").savings)}</div></div>      ${topC ? `<div class="top-client-box">
         <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:4px">★ CLIENTE DO MÊS</div>
         <div style="font-weight:700;color:#e8e4d9">${topC.name}</div>
         <div style="font-size:11px;color:#777">${fU(topC.volume)} comprados este mês</div>
@@ -1538,9 +1556,19 @@
     };
 
     // ── WALLETS ────────────────────────────────────────────────────────
+    function duplicateWalletGroups() {
+      const groups = {};
+      db.wallets.forEach(wallet => {
+        const key = `${String(wallet.name || "").trim().toLocaleLowerCase("pt-AO")}::${wallet.asset || "USDT"}`;
+        (groups[key] ||= []).push(wallet);
+      });
+      return Object.values(groups).filter(group => group.length > 1);
+    }
+
     function pageWallets() {
       const assetTotals = {}; db.wallets.forEach(w => { const a = w.asset || "USDT"; assetTotals[a] = (assetTotals[a] || 0) + Number(w.balance || 0); });
       const tK = db.accounts.reduce((s, a) => s + Number(a.balance || 0), 0);
+      const duplicateGroups = duplicateWalletGroups();
 
       // captura os valores atuais dos formulários antes de reconstruir o HTML
       const nwNameVal = document.getElementById("nw-name")?.value || "";
@@ -1549,15 +1577,15 @@
       const na2BalVal = document.getElementById("na2-bal")?.value || "";
       const na2TypeVal = document.getElementById("na2-type")?.value || "negocio";
 
-      return `
-      <div class="grid2">
+       return `${duplicateGroups.length ? `<div class="card" style="margin-bottom:16px;border-color:#ff785066;color:#ffb090"><strong>⚠ Carteiras potencialmente duplicadas</strong><div style="font-size:11px;margin-top:8px;color:#aaa">Nenhuma foi apagada automaticamente. Verifica os IDs antes de decidir.</div>${duplicateGroups.map(group => `<div style="margin-top:8px">${group.map(wallet => `${wallet.name || "Sem nome"} (${wallet.asset || "USDT"}) — ID ${wallet.id}`).join(" · ")}</div>`).join("")}</div>` : ""}
+       <div class="grid2">
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
           <div class="sec-title" style="margin:0">Carteiras (Multi-Ativo)</div>
           <button class="btn-danger" onclick="resetCollection('wallets','Carteiras')">🗑</button>
         </div>
-          ${db.wallets.map(w => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <span style="flex:1;font-size:13px;color:#ccc">${w.name}</span>
+           ${db.wallets.map(w => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+           <span style="flex:1;font-size:13px;color:#ccc"><strong>${w.name}</strong><span style="display:block;font-size:9px;color:#555">ID: ${w.id} · ${db.lots.filter(lot => String(lot.walletId) === String(w.id)).length} lote(s)</span></span>
           <span style="width:120px;text-align:right;color:#50c878;font-weight:700">${fAsset(walletBalance(w.id), w.asset || "USDT")}</span>
           <span style="font-size:11px;color:#555;width:45px">${w.asset || "USDT"}</span>
           <button class="btn-danger" onclick="delWallet('${w.id}')">✕</button>
@@ -1733,7 +1761,7 @@
           <div style="margin-top:16px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
               <div style="font-size:11px;color:#c9a84c;letter-spacing:2px">LOTES A TRANSFERIR</div>
-              <button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="addTransferLot()" ${!fromId ? "disabled" : ""}>+ LOTE</button>
+               <div style="display:flex;gap:6px"><button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="addTransferLot()" ${!fromId ? "disabled" : ""}>+ LOTE</button><button class="btn-ghost" style="font-size:11px;padding:5px 12px" onclick="maxTransferLots()" ${!fromId ? "disabled" : ""}>MÁX</button></div>
             </div>
             ${!fromId ? '<div style="font-size:12px;color:#444;padding:8px 0">Escolhe primeiro a carteira de origem.</div>' : ""}
             ${fromId && transferLots.length === 0 ? '<div style="font-size:12px;color:#444;padding:8px 0">Clica em "+ LOTE" para escolher o stock a transferir.</div>' : ""}
@@ -1791,6 +1819,12 @@
 
     window.onTransferFromChange = function () { transferLots = []; render(); };
     window.addTransferLot = function () { transferLots.push({ uid: uid(), lotId: "", qty: "" }); render(); };
+    window.maxTransferLots = function () {
+      const fromId = document.getElementById("tr-from")?.value;
+      if (!fromId) return alert("Escolhe primeiro a carteira de origem.");
+      transferLots = walletStock(fromId).map((lot, index) => ({ uid: uid() + index, lotId: String(lot.id), qty: Number(lot.remaining).toFixed(8) }));
+      render();
+    };
     window.removeTransferLot = function (u) { transferLots = transferLots.filter(e => String(e.uid) !== String(u)); renderTransfersLots(); };
     window.updateTransferLot = function (u, k, v) { transferLots = transferLots.map(e => String(e.uid) === String(u) ? { ...e, [k]: v } : e); renderTransfersLots(); };
 
@@ -1867,7 +1901,12 @@
     };
 
     window.adjWallet = async (id, v) => { const w = db.wallets.find(x => String(x.id) === String(id)); if (w) await saveDoc("wallets", { ...w, balance: parseFloat(v) || 0 }); };
-    window.delWallet = async (id) => { if (confirm("Eliminar carteira?")) await delDoc("wallets", id); };
+    window.delWallet = async (id) => {
+      const relatedLots = db.lots.filter(lot => String(lot.walletId) === String(id));
+      const relatedTransfers = db.transfers.filter(transfer => String(transfer.fromId) === String(id) || String(transfer.toId) === String(id));
+      if (relatedLots.length || relatedTransfers.length) return alert(`Esta carteira tem histórico associado (${relatedLots.length} lote(s), ${relatedTransfers.length} transferência(s)). Não pode ser eliminada sem uma migração explícita.`);
+      if (confirm("Eliminar carteira sem histórico?")) await delDoc("wallets", id);
+    };
     window.adjAccount = async (id, v) => { const a = db.accounts.find(x => String(x.id) === String(id)); if (a) await saveDoc("accounts", { ...a, balance: parseFloat(v) || 0 }); };
     window.delAccount = async (id) => { if (confirm("Eliminar conta?")) await delDoc("accounts", id); };
     window.addWallet = async () => { const n = document.getElementById("nw-name")?.value?.trim(); if (!n) return; await saveDoc("wallets", { id: uid(), name: n, balance: 0, asset: document.getElementById("nw-asset")?.value?.trim() || "USDT" }); };
@@ -1955,9 +1994,9 @@
         <div class="card">
           <div class="sec-title">💰 Gestão do Lucro</div>
           <div style="font-size:12px;color:#666;margin-bottom:16px">Lucro de <span style="color:#c9a84c">${fKz(profit)}</span>:</div>
-          <div class="budget-box blue"><div class="budget-label">REINVESTIR (${Math.round(currentSplit().reinvest * 100)}%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(profit * currentSplit().reinvest)}</div><div style="font-size:10px;color:#444;margin-top:4px">Aumenta o capital de giro</div></div>
-          <div class="budget-box green"><div class="budget-label">SALÁRIO (${Math.round(currentSplit().salary * 100)}%)</div><div class="budget-val" style="color:#50c878">${fKz(profit * currentSplit().salary)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
-          <div class="budget-box gold"><div class="budget-label">POUPANÇA (${Math.round(currentSplit().savings * 100)}%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit * currentSplit().savings)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>    </div>
+          <div class="budget-box blue"><div class="budget-label">REINVESTIR (${Math.round(currentSplit("kambio").reinvest * 100)}%)</div><div class="budget-val" style="color:#7eb8f7">${fKz(profit * currentSplit("kambio").reinvest)}</div><div style="font-size:10px;color:#444;margin-top:4px">Aumenta o capital de giro</div></div>
+          <div class="budget-box green"><div class="budget-label">SALÁRIO (${Math.round(currentSplit("kambio").salary * 100)}%)</div><div class="budget-val" style="color:#50c878">${fKz(profit * currentSplit("kambio").salary)}</div><div style="font-size:10px;color:#444;margin-top:4px">Remuneração pessoal saudável</div></div>
+          <div class="budget-box gold"><div class="budget-label">POUPANÇA (${Math.round(currentSplit("kambio").savings * 100)}%)</div><div class="budget-val" style="color:#c9a84c">${fKz(profit * currentSplit("kambio").savings)}</div><div style="font-size:10px;color:#444;margin-top:4px">Fundo de emergência</div></div>    </div>
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
             <div class="sec-title" style="margin:0">Vendas do Período</div>
@@ -2050,16 +2089,16 @@
       <div class="card" style="max-width:700px;margin:16px auto 0">
         <div class="sec-title">📝 Notas & Ideias de Melhorias</div>
         <div style="font-size:11px;color:#555;margin-bottom:14px">Regista aqui ideias, bugs a corrigir ou funcionalidades a implementar — tudo fica guardado no sistema.</div>
-        <textarea id="notes-text" rows="14" style="resize:vertical" placeholder="ex:&#10;- Adicionar filtro de vendas por afiliado&#10;- Corrigir cálculo do stock esgotado&#10;- Ligar ranking ao WhatsApp">${db.notes[0]?.text || ""}</textarea>
+          <textarea id="notes-text" rows="14" style="resize:vertical" placeholder="ex:&#10;- Adicionar filtro de vendas por afiliado&#10;- Corrigir cálculo do stock esgotado&#10;- Ligar ranking ao WhatsApp">${sharedNotes()[0]?.text || ""}</textarea>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
-          <div style="font-size:10px;color:#555">${db.notes[0]?.updatedAt ? "Última atualização: " + new Date(db.notes[0].updatedAt).toLocaleString("pt-AO") : "Ainda sem notas guardadas"}</div>
+          <div style="font-size:10px;color:#555">${sharedNotes()[0]?.updatedAt ? "Última atualização: " + new Date(sharedNotes()[0].updatedAt).toLocaleString("pt-AO") : "Ainda sem notas guardadas"}</div>
           <button class="btn-primary" onclick="saveNotes()">GUARDAR NOTAS</button>
         </div>
       </div>`;
     }
     window.saveNotes = async function () {
       const text = document.getElementById("notes-text")?.value || "";
-      await saveDoc("notes", { id: "main", text, updatedAt: new Date().toISOString() });
+      await saveDoc("hub_notes", { id: "main", text, updatedAt: new Date().toISOString(), origin: "kambio" });
       alert("✅ Notas guardadas!");
     };
     window.delSup = async (id) => { if (confirm("Eliminar?")) await delDoc("suppliers", id); };
