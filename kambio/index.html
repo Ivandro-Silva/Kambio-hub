@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#08080f" />
   <link rel="manifest" href="./manifest.webmanifest" />
   <title>Kâmbio Business PRO</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 
   <!-- Firebase SDK -->
   <script type="module">
@@ -30,7 +31,8 @@
     };
     // ══════════════════════════════════════════════════════════════════
 
-    const COLLECTIONS = ["lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
+    const COLLECTIONS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_taxi_costs", "hub_imports", "hub_loans", "lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
+    const RESET_COLLECTIONS = ["lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
     const DEFAULT_SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
     const DEFAULT_WALLETS = ["RedotPay", "Binance", "Bybit", "Kast", "Grey"];
     const DEFAULT_ACCOUNTS = [
@@ -42,7 +44,7 @@
       { name: "É-Kwanza", type: "negocio" },
     ];
     let app, db_fire, auth, currentUser = null;
-    let db = { lots: [], sales: [], intermediations: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], hub_notes: [], settings: [], opening_balances: [] };
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_taxi_costs: [], hub_imports: [], hub_loans: [], lots: [], sales: [], intermediations: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], hub_notes: [], settings: [], opening_balances: [] };
     let unsubscribers = [];
 
     // ── LOCAL FALLBACK (quando Firebase não está configurado) ──────────
@@ -2047,16 +2049,20 @@
          <div class="card">
            <div class="sec-title">Dados & Backup</div>
            <div style="display:flex;flex-direction:column;gap:12px">
-             <button class="btn-primary" onclick="exportData()">⬇ EXPORTAR BACKUP JSON</button>
+               <button class="btn-primary" onclick="exportData()">⬇ EXPORTAR BACKUP COMPLETO</button>
              <div style="display:flex;gap:8px;flex-wrap:wrap">
                <button class="btn-ghost" style="flex:1" onclick="exportCsv('sales')">VENDAS CSV</button>
                <button class="btn-ghost" style="flex:1" onclick="exportCsv('lots')">LOTES CSV</button>
                <button class="btn-ghost" style="flex:1" onclick="exportCsv('clients')">CLIENTES CSV</button>
              </div>
              <label class="btn-ghost" style="text-align:center;cursor:pointer;padding:8px 16px;font-size:12px">
-              ⬆ IMPORTAR BACKUP
-              <input type="file" accept=".json" onchange="importData(event)" style="display:none"/>
-            </label>
+                ⬆ RESTAURAR BACKUP COMPLETO
+                <input type="file" accept=".json,.xlsx,.xls,.csv,text/csv" onchange="restoreBackupFile(event)" style="display:none"/>
+             </label>
+             <label class="btn-ghost" style="text-align:center;cursor:pointer;padding:8px 16px;font-size:12px">
+                ⬆ IMPORTAR CLIENTES XLSX / CSV
+               <input type="file" accept=".xlsx,.xls,.csv,text/csv" onchange="importClientsSpreadsheet(event)" style="display:none"/>
+             </label>
             <div style="border-top:1px solid #1a1a2e;padding-top:12px">
               <button class="btn-danger" style="width:100%;padding:10px" onclick="resetData()">⚠ APAGAR TODOS OS DADOS</button>
            </div>
@@ -2137,25 +2143,96 @@
         .map(row => row.map(quote).join(",")).join("\n");
       downloadFile(`kambio_${collection}_${today()}.csv`, "\ufeff" + csv, "text/csv;charset=utf-8");
     };
-    window.exportData = () => downloadFile(`kambio_backup_${today()}.json`, JSON.stringify(db, null, 2), "application/json");
-    window.importData = (e) => {
-      const f = e.target.files[0]; if (!f) return;
-      const r = new FileReader();
-      r.onload = async (ev) => {
-        try {
-          const d = JSON.parse(ev.target.result);
-          if (!confirm("Substituir todos os dados actuais?")) return;
-          for (const col of COLLECTIONS) {
-            if (d[col]) { for (const item of d[col]) await saveDoc(col, item); }
+    window.exportData = () => downloadFile(`kambio_backup_${today()}.json`, JSON.stringify({ version: 2, createdAt: new Date().toISOString(), source: "Kambio Business", collections: Object.fromEntries(COLLECTIONS.map(col => [col, db[col] || []])) }, null, 2), "application/json");
+    const normalizeImportKey = value => String(value || "").trim().toLocaleLowerCase("pt").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+    function parseCsvRows(text) {
+      const parsed = [], clean = String(text || "").replace(/^\uFEFF/, "");
+      let row = [], field = "", quoted = false;
+      for (let i = 0; i < clean.length; i++) {
+        const char = clean[i];
+        if (char === '"' && quoted && clean[i + 1] === '"') { field += '"'; i++; continue; }
+        if (char === '"') { quoted = !quoted; continue; }
+        if (char === "," && !quoted) { row.push(field); field = ""; continue; }
+        if ((char === "\n" || char === "\r") && !quoted) { if (char === "\r" && clean[i + 1] === "\n") i++; row.push(field); parsed.push(row); row = []; field = ""; continue; }
+        field += char;
+      }
+      if (field || row.length) { row.push(field); parsed.push(row); }
+      const headers = parsed.shift() || [];
+      return parsed.filter(values => values.some(value => String(value).trim())).map(values => headers.reduce((record, header, index) => { record[header] = values[index] || ""; return record; }, {}));
+    }
+    function sheetRows(sheet) {
+      const matrix = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+      const firstCell = matrix[0]?.[0];
+      if (matrix.length && matrix.every(row => row.length <= 1) && String(firstCell || "").includes(",")) return parseCsvRows(matrix.map(row => String(row[0] || "")).join("\n"));
+      return window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    }
+    function spreadsheetCollections(workbook) {
+      const aliases = { clients: ["clients", "clientes"], wallets: ["wallets", "carteiras"], lots: ["lots", "lotes"], sales: ["sales", "vendas"], transfers: ["transfers", "transferencias"], intermediations: ["intermediations", "intermediacao"], accounts: ["accounts", "contas"], suppliers: ["suppliers", "fornecedores"], affiliates: ["affiliates", "afiliados"], notes: ["notes", "notas"], hub_notes: ["hub notes", "comentarios"], hub_income: ["hub income", "entradas"], hub_expenses: ["hub expenses", "saidas"], hub_taxi: ["hub taxi", "taxi"], hub_taxi_costs: ["hub taxi costs"], hub_imports: ["hub imports", "importacao"], hub_custody: ["hub custody", "custodia"], hub_loans: ["hub loans", "emprestimos"], settings: ["settings", "definicoes"], opening_balances: ["opening balances", "saldos iniciais"] };
+      const result = {};
+      for (const sheetName of workbook.SheetNames) {
+        const rows = sheetRows(workbook.Sheets[sheetName]);
+        const normalized = normalizeImportKey(sheetName);
+        const collection = Object.entries(aliases).find(([, names]) => names.includes(normalized))?.[0] || (workbook.SheetNames.length === 1 && rows.some(row => Object.keys(row).some(key => ["name", "nome"].includes(normalizeImportKey(key)))) ? "clients" : null);
+        if (collection && rows.length) result[collection] = rows;
+      }
+      return result;
+    }
+    function backupCollections(payload) { return payload?.collections && typeof payload.collections === "object" ? payload.collections : payload; }
+    async function restoreBackupFile(event, clientsOnly = false) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        let collections;
+        if (/\.json$/i.test(file.name)) collections = backupCollections(JSON.parse(await file.text()));
+        else {
+          if (!window.XLSX) throw new Error("Leitor Excel indisponível. Abre a aplicação com Internet.");
+          collections = spreadsheetCollections(window.XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true }));
+        }
+        const allowed = clientsOnly ? ["clients"] : COLLECTIONS;
+        const selected = Object.fromEntries(allowed.filter(col => Array.isArray(collections?.[col]) && collections[col].length).map(col => [col, collections[col]]));
+        const counts = Object.fromEntries(Object.entries(selected).map(([col, rows]) => [col, rows.length]));
+        if (!Object.keys(selected).length) throw new Error(clientsOnly ? "Não foi encontrada uma coluna de nome de cliente. Usa a primeira linha como cabeçalho e confirma que existe a coluna Nome/name." : "O ficheiro não possui colecções reconhecidas. Para restauração geral usa o backup JSON exportado pelo sistema ou folhas com nomes reconhecidos.");
+        const preview = Object.entries(counts).map(([col, count]) => `${col}: ${count}`).join("\n");
+        if (!confirm(`PRÉVIA DA RESTAURAÇÃO\n\n${preview}\n\nA restauração será feita por merge, sem apagar dados existentes. Continuar?`)) return;
+        const result = { created: 0, updated: 0, skipped: 0, errors: [] };
+        for (const col of allowed) {
+          const updates = [];
+          const seenIds = new Set();
+          for (const raw of selected[col] || []) {
+            try {
+              const item = { ...raw };
+              if (!item.id) { result.skipped++; continue; }
+              item.id = String(item.id);
+              if (seenIds.has(item.id)) { result.skipped++; continue; }
+              seenIds.add(item.id);
+              if (col === "clients" && item.walletIds && typeof item.walletIds === "string") { try { item.walletIds = JSON.parse(item.walletIds); } catch { item.walletIds = item.walletIds.split(/[\n;,]/).map(value => value.trim()).filter(Boolean); } }
+              const exists = (db[col] || []).some(existing => String(existing.id) === item.id);
+              updates.push({ col, item, exists });
+            } catch (error) { result.errors.push(`${col}/${raw.id || "sem-id"}: ${error.message}`); }
           }
-          alert("✅ Dados importados!"); render();
-        } catch { alert("Ficheiro inválido."); }
-      }; r.readAsText(f);
-    };
+          for (let start = 0; start < updates.length; start += 400) {
+            const chunk = updates.slice(start, start + 400);
+            try {
+              await bulkSave(chunk);
+              chunk.forEach(entry => entry.exists ? result.updated++ : result.created++);
+            } catch (error) {
+              chunk.forEach(entry => result.errors.push(`${col}/${entry.item.id}: ${error.message}`));
+            }
+          }
+        }
+        alert(`${result.errors.length ? "RESTAURAÇÃO PARCIAL" : "RESTAURAÇÃO CONCLUÍDA"}\n\nCriados: ${result.created}\nActualizados: ${result.updated}\nIgnorados: ${result.skipped}\nErros: ${result.errors.length}`);
+        render();
+      } catch (error) {
+        console.error(error);
+        alert(`Restauração interrompida.\n\nCausa: ${error.message}`);
+      } finally { event.target.value = ""; }
+    }
+    window.restoreBackupFile = event => restoreBackupFile(event);
+    window.importClientsSpreadsheet = event => restoreBackupFile(event, true);
     window.resetData = async () => {
       if (!confirm("⚠️ Será criado um backup JSON e depois serão apagados TODOS os dados. Continuar?")) return;
       exportData();
-      for (const col of COLLECTIONS) for (const item of [...db[col]]) await delDoc(col, item.id);
+      for (const col of RESET_COLLECTIONS) for (const item of [...(db[col] || [])]) await delDoc(col, item.id);
       localStorage.removeItem(LOCAL_KEY);
       seeded = false;
       alert("Dados apagados."); render();
