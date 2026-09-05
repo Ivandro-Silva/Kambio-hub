@@ -25,11 +25,11 @@
     };
 
     // ── COLLECTIONS ────────────────────────────────────────────────────
-    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "sales", "lots", "wallets", "accounts", "hub_notes", "clients", "settings"];
+    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "hub_investments", "hub_deposits", "sales", "lots", "wallets", "accounts", "hub_notes", "clients", "settings"];
     const DEFAULT_SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
 
     let app, db_fire, auth, currentUser = null;
-    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [], settings: [] };
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], hub_investments: [], hub_deposits: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [], settings: [] };
 
     // ── FIREBASE INIT ──────────────────────────────────────────────────
     async function initAppAndAuth() {
@@ -125,6 +125,8 @@
       { id: "taxi", label: "Táxi", icon: "◉" },
       { id: "importacao", label: "Importação", icon: "◈" },
       { id: "custodia", label: "Custódia", icon: "🔒" },
+      { id: "investimentos", label: "Investimentos", icon: "⬢" },
+      { id: "aplicacoes", label: "Aplicações", icon: "⏳" },
       { id: "emprestimos", label: "Empréstimos", icon: "💵" },
       { id: "calculadora", label: "Calculadora", icon: "⊕" },
       { id: "definicoes", label: "Definições", icon: "⚙" },
@@ -277,14 +279,46 @@
       return walletsKz + accountsKz;
     }
 
-    // ── PATRIMÔNIO TOTAL (excluindo custódia) ──────────────────────────
+    // ── PATRIMÔNIO TOTAL (excluindo custódia e sem dupla contagem) ─────
+    function kbWalletsKz() {
+      return db.wallets.reduce((s, w) => {
+        const asset = w.asset || "USDT";
+        const walletStock = db.lots.filter(l => String(l.walletId) === String(w.id) && (l.asset || "USDT") === asset && Number(l.remaining || 0) > 0)
+          .reduce((total, lot) => total + Number(lot.remaining || 0), 0);
+        return s + walletStock * avgBuyRate(asset);
+      }, 0);
+    }
+    function kbAccountsKz(type = null) {
+      return db.accounts.filter(a => !type || a.type === type).reduce((s, a) => s + Number(a.balance || 0), 0);
+    }
+    function isTaxiInvestment(cost) {
+      return cost.costType === "investimento" || (!cost.costType && cost.category === "Compra do Carro");
+    }
+    function taxiInvestmentTotal() {
+      return db.hub_taxi_costs.filter(isTaxiInvestment).reduce((s, x) => s + Number(x.amount || 0), 0);
+    }
+    function taxiOperatingTotal() {
+      return db.hub_taxi_costs.filter(x => !isTaxiInvestment(x)).reduce((s, x) => s + Number(x.amount || 0), 0);
+    }
+    function taxiCarValue() {
+      return Number((db.settings || []).find(s => s.id === "taxi-car-value")?.value || 0);
+    }
+    function importStockValue() {
+      return db.hub_imports.filter(i => i.status !== "vendido").reduce((s, i) => s + Number(i.totalCostKz || 0), 0);
+    }
+    function importProfitTotal() {
+      return db.hub_imports.filter(i => i.status === "vendido").reduce((s, i) => s + Number(i.profitKz || 0), 0);
+    }
+    function investmentsValue() {
+      return (db.hub_investments || []).filter(x => x.status !== "fechado").reduce((s, x) => s + Number(x.currentValue ?? x.myCapital ?? 0), 0);
+    }
+    function depositsValue() {
+      return (db.hub_deposits || []).filter(x => !x.status || x.status === "Em aplicação").reduce((s, x) => s + Number(x.amount || 0), 0);
+    }
     function patrimonio() {
-      const income = db.hub_income.reduce((s, x) => s + Number(x.amount || 0), 0);
-      const expenses = db.hub_expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiIn = db.hub_taxi.reduce((s, x) => s + Number(x.amount || 0), 0);
-      const taxiCost = db.hub_taxi_costs.reduce((s, x) => s + Number(x.amount || 0), 0);
-      const importProfit = db.hub_imports.filter(i => i.status === "vendido").reduce((s, i) => s + Number(i.profitKz || 0), 0);
-      return income - expenses + taxiIn - taxiCost + importProfit + kbCapitalKz();
+      // Nota: entradas/saídas pessoais já movimentam o saldo das contas — não são somadas aqui (evitar dupla contagem).
+      return kbWalletsKz() + kbAccountsKz() + taxiCarValue() + (taxiIn - taxiOperatingTotal()) + importProfitTotal() + importStockValue() + investmentsValue() + depositsValue();
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -297,6 +331,8 @@
         case "taxi": return pageTaxi();
         case "importacao": return pageImportacao();
         case "custodia": return pageCustodia();
+        case "investimentos": return pageInvestimentos();
+        case "aplicacoes": return pageAplicacoes();
         case "emprestimos": return pageEmprestimos();
         case "calculadora": return pageCalculadora();
         case "definicoes": return pageDefinicoes();
@@ -314,8 +350,6 @@
       const income = db.hub_income.reduce((s, x) => s + Number(x.amount || 0), 0);
       const expenses = db.hub_expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiIn = db.hub_taxi.reduce((s, x) => s + Number(x.amount || 0), 0);
-      const taxiCost = db.hub_taxi_costs.reduce((s, x) => s + Number(x.amount || 0), 0);
-      const importProfit = db.hub_imports.filter(i => i.status === "vendido").reduce((s, i) => s + Number(i.profitKz || 0), 0);
       const custodia = db.hub_custody.reduce((s, x) => s + Number(x.amount || 0), 0);
       const custodiaDevolvido = db.hub_custody.filter(x => x.returned).reduce((s, x) => s + Number(x.amount || 0), 0);
       const custodiaAtiva = custodia - custodiaDevolvido;
@@ -344,20 +378,27 @@
       </div>
 
       <div class="grid4" style="margin-bottom:20px">
-        ${sc("Finanças Pessoais", fKz(income - expenses), income - expenses >= 0 ? "#50c878" : "#ff5050", "◆")}
-        ${sc("Táxi (líquido)", fKz(taxiIn - taxiCost), "#7eb8f7", "◉")}
-        ${sc("Importação (lucro)", fKz(importProfit), "#c084fc", "◈")}
+        ${sc("Fluxo Pessoal (total)", fKz(income - expenses), income - expenses >= 0 ? "#50c878" : "#ff5050", "◆")}
+        ${sc("Táxi (líquido)", fKz(taxiIn - taxiOperatingTotal()), "#7eb8f7", "◉")}
+        ${sc("Importação (lucro)", fKz(importProfitTotal()), "#c084fc", "◈")}
         ${sc("Em Custódia", fKz(custodiaAtiva), "#ff7850", "🔒")}
       </div>
 
       <div class="card" style="margin-bottom:20px">
         <div class="sec-title">Decomposição do Património</div>
-        <div class="row"><span>Entradas pessoais</span><span style="color:#50c878">${fKz(income)}</span></div>
-        <div class="row"><span>Despesas pessoais</span><span style="color:#ff7850">- ${fKz(expenses)}</span></div>
-        <div class="row"><span>Receita do Táxi</span><span style="color:#7eb8f7">${fKz(taxiIn)}</span></div>
-        <div class="row"><span>Custos do Táxi</span><span style="color:#ff7850">- ${fKz(taxiCost)}</span></div>
-        <div class="row"><span>Lucro Importação</span><span style="color:#c084fc">${fKz(importProfit)}</span></div>
-        <div class="row"><span>Capital na Kâmbio Business (convertido)</span><span style="color:#7eb8f7">${fKz(kbCapitalKz())}</span></div>
+        <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin:10px 0 6px">DINHEIRO DISPONÍVEL</div>
+        <div class="row"><span>Carteiras cripto (ao câmbio médio de compra)</span><span style="color:#7eb8f7">${fKz(kbWalletsKz())}</span></div>
+        <div class="row"><span>Contas de negócio</span><span style="color:#7eb8f7">${fKz(kbAccountsKz("negocio"))}</span></div>
+        <div class="row"><span>Contas pessoais</span><span style="color:#c9a84c">${fKz(kbAccountsKz("pessoal"))}</span></div>
+        <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin:12px 0 6px">NEGÓCIOS</div>
+        <div class="row"><span>Táxi — resultado acumulado (receitas − custos de operação)</span><span style="color:#7eb8f7">${fKz(taxiIn - taxiOperatingTotal())}</span></div>
+        <div class="row"><span>Importação — lucro realizado</span><span style="color:#c084fc">${fKz(importProfitTotal())}</span></div>
+        <div class="row"><span>Importação — stock em curso (ao custo)</span><span style="color:#c084fc">${fKz(importStockValue())}</span></div>
+        <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin:12px 0 6px">INVESTIMENTOS E APLICAÇÕES</div>
+        <div class="row"><span>Investimentos com parceiros (minha participação)</span><span style="color:#50c878">${fKz(investmentsValue())}</span></div>
+        <div class="row"><span>Depósitos a prazo (capital aplicado)</span><span style="color:#50c878">${fKz(depositsValue())}</span></div>
+        <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin:12px 0 6px">ATIVOS</div>
+        <div class="row"><span>Carro do Táxi (valor estimado actual)</span><span style="color:#c084fc">${fKz(taxiCarValue())}</span></div>
         <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">          
           <div class="row bold"><span>TOTAL (é teu)</span><span style="color:#c9a84c;font-size:15px">${fKz(total)}</span></div>
           <div class="row"><span style="color:#555">Em custódia (não é teu)</span><span style="color:#ff7850">- ${fKz(custodiaAtiva)}</span></div>
@@ -570,33 +611,44 @@
       const entries = [...db.hub_taxi].sort((a, b) => new Date(b.date) - new Date(a.date));
       const costs = [...db.hub_taxi_costs].sort((a, b) => new Date(b.date) - new Date(a.date));
       const totalIn = db.hub_taxi.reduce((s, x) => s + Number(x.amount || 0), 0);
-      const totalCost = db.hub_taxi_costs.reduce((s, x) => s + Number(x.amount || 0), 0);
-      const liquid = totalIn - totalCost;
-      // breakeven: total cost invested vs total revenue
-      const pctBreak = totalCost > 0 ? Math.min(100, (totalIn / totalCost) * 100).toFixed(1) : 0;
+      const totalInvestment = taxiInvestmentTotal();
+      const totalOperating = taxiOperatingTotal();
+      const liquid = totalIn - totalOperating;
+      // breakeven: investimento no carro vs receita acumulada
+      const pctBreak = totalInvestment > 0 ? Math.min(100, (totalIn / totalInvestment) * 100).toFixed(1) : 0;
+      const carValue = taxiCarValue();
 
       const COST_CATS = ["Compra do Carro", "Peça/Reparação", "Combustível", "Manutenção Preventiva", "Caixa de Segurança", "Seguro", "Outro"];
 
       return `
           <div class="grid4" style="margin-bottom:20px">
             ${sc("Receita Total", fKz(totalIn), "#50c878", "▲")}
-            ${sc("Custos Totais", fKz(totalCost), "#ff7850", "▼")}
-            ${sc("Líquido", fKz(liquid), liquid >= 0 ? "#c9a84c" : "#ff5050", "◆")}
-            ${sc("Recuperado", pctBreak + "%", "#7eb8f7", "◈")}
+            ${sc("Custos de Operação", fKz(totalOperating), "#ff7850", "▼")}
+            ${sc("Líquido (operação)", fKz(liquid), liquid >= 0 ? "#c9a84c" : "#ff5050", "◆")}
+            ${sc("Carro (valor actual)", fKz(carValue), "#c084fc", "⬢")}
           </div>
 
           <!-- Breakeven visual -->
           <div class="card" style="margin-bottom:20px">
-            <div class="sec-title">Breakeven — Recuperação do Investimento</div>
+            <div class="sec-title">Breakeven — Recuperação do Investimento no Carro</div>
             <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:8px">
-              <span>Investido: <span style="color:#ff7850">${fKz(totalCost)}</span></span>
+              <span>Investido no carro: <span style="color:#ff7850">${fKz(totalInvestment)}</span></span>
               <span>Recuperado: <span style="color:#50c878">${fKz(totalIn)}</span></span>
-              <span style="color:${liquid >= 0 ? "#50c878" : "#ff7850"}">${liquid >= 0 ? "✅ BREAKEVEN ATINGIDO" : "Faltam " + fKz(Math.abs(liquid))}</span>
+              <span style="color:${totalIn >= totalInvestment ? "#50c878" : "#ff7850"}">${totalIn >= totalInvestment ? "✅ BREAKEVEN ATINGIDO" : "Faltam " + fKz(Math.abs(totalInvestment - totalIn))}</span>
             </div>
             <div style="background:#1a1a2e;border-radius:4px;height:10px;overflow:hidden">
               <div style="background:linear-gradient(90deg,#ff7850,#c9a84c,#50c878);width:${pctBreak}%;height:100%;transition:width 1s;border-radius:4px"></div>
             </div>
             <div style="font-size:10px;color:#555;margin-top:4px">${pctBreak}% do investimento recuperado</div>
+          </div>
+
+          <div class="card" style="margin-bottom:20px">
+            <div class="sec-title">🚗 Carro — Activo do Negócio</div>
+            <div style="font-size:11px;color:#666;margin-bottom:10px">O carro entra no património como activo, não como dinheiro disponível. Regista o valor estimado actual (custo de aquisição + preparação: ${fKz(totalInvestment)}).</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="number" id="taxi-car-value-input" min="0" step="1000" value="${carValue || ""}" placeholder="ex: 6250000" style="flex:1"/>
+              <button class="btn-p" onclick="saveTaxiCarValue()">GUARDAR VALOR</button>
+            </div>
           </div>
 
           <div class="grid2">
@@ -625,10 +677,11 @@
               </div>
               ${costs.length === 0 ? empty("Sem custos registados") : `
               <div style="overflow-x:auto"><table class="tbl">
-                <thead><tr><th>Data</th><th>Categoria</th><th>Valor</th><th>Descrição</th><th></th></tr></thead>
+                <thead><tr><th>Data</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Descrição</th><th></th></tr></thead>
                 <tbody>${costs.map(x => `<tr>
                   <td>${fDate(x.date)}</td>
                   <td><span class="cat-badge red">${x.category}</span></td>
+                  <td>${isTaxiInvestment(x) ? '<span class="cat-badge green">INVESTIMENTO</span>' : '<span style="color:#888;font-size:10px">operação</span>'}</td>
                   <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
                   <td style="color:#555">${x.description || "—"}</td>
                   <td><button class="btn-d" onclick="del('hub_taxi_costs','${x.id}')">✕</button></td>
@@ -648,18 +701,25 @@
         await saveDoc("hub_taxi", { id: uid(), date: d, type: t, amount: a, notes: n });
         modal = null; render();
       }) : ""}
-      ${modal === "taxi-cost" ? modalForm("CUSTO DO TÁXI", "taxi_cost", [
+      ${modal === "taxi-cost" ? modalForm("CUSTO / INVESTIMENTO DO TÁXI", "taxi_cost", [
         { id: "date", label: "Data", type: "date", val: today() },
         { id: "category", label: "Categoria", type: "select", opts: COST_CATS },
+        { id: "costType", label: "Tipo de despesa", type: "select", opts: ["Operação (corrente)", "Investimento (carro/preparação)"] },
         { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 50000" },
         { id: "description", label: "Descrição", type: "text", placeholder: "ex: Compra pneus dianteiros" },
       ], async () => {
         const d = gv("date"), c = gv("category"), a = parseFloat(gv("amount") || 0), desc = gv("description");
+        const costType = gv("costType").startsWith("Investimento") ? "investimento" : "operacao";
         if (!a || !c) return alert("Categoria e valor obrigatórios.");
-        await saveDoc("hub_taxi_costs", { id: uid(), date: d, category: c, amount: a, description: desc });
+        await saveDoc("hub_taxi_costs", { id: uid(), date: d, category: c, costType, amount: a, description: desc });
         modal = null; render();
       }) : ""}`;
     }
+    window.saveTaxiCarValue = async function () {
+      const value = Math.max(0, Number(document.getElementById("taxi-car-value-input")?.value || 0));
+      await saveDoc("settings", { id: "taxi-car-value", value, updatedAt: new Date().toISOString() });
+      alert("✅ Valor do carro guardado. Entrará no património como activo.");
+    };
 
     // ── IMPORTAÇÃO ─────────────────────────────────────────────────────
     function pageImportacao() {
@@ -1048,6 +1108,177 @@
     window.onLoanAssetChange = function (v) { window._loanAsset = v; render(); };
 
     function pendingSaleAmount(s) { return Number(s.totalRevenue || 0); }
+
+    // ── INVESTIMENTOS COM PARCEIROS ─────────────────────────────────────
+    function pageInvestimentos() {
+      const items = [...(db.hub_investments || [])].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+      const invested = items.filter(x => x.status !== "fechado").reduce((s, x) => s + Number(x.myCapital || 0), 0);
+      const current = items.filter(x => x.status !== "fechado").reduce((s, x) => s + Number(x.currentValue ?? x.myCapital ?? 0), 0);
+      const result = current - invested;
+
+      return `
+      <div class="grid4" style="margin-bottom:20px">
+        ${sc("Meu Capital", fKz(invested), "#ff7850", "▼")}
+        ${sc("Valor Actual (participação)", fKz(current), "#50c878", "▲")}
+        ${sc("Resultado", fKz(result), result >= 0 ? "#c9a84c" : "#ff5050", "◆")}
+        ${sc("Negócios Activos", items.filter(x => x.status !== "fechado").length, "#7eb8f7", "⬢")}
+      </div>
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="sec-title" style="margin:0">Negócios com Parceiros (ex: Óleo)</div>
+          <button class="btn-p" onclick="openModal('investment')">+ INVESTIMENTO</button>
+        </div>
+        <div style="font-size:11px;color:#666;margin-bottom:12px">Só a tua participação entra no património. O capital dos parceiros não é teu.</div>
+        ${items.length === 0 ? empty("Sem investimentos registados") : `
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Negócio</th><th>Parceiro</th><th>Participação</th><th>Meu Capital</th><th>Capital Parceiro</th><th>Responsável</th><th>Valor Actual</th><th>Estado</th><th></th></tr></thead>
+          <tbody>${items.map(x => `<tr>
+            <td style="font-weight:700;color:#e8e4d9">${x.name}</td>
+            <td style="color:#777">${x.partner || "—"}</td>
+            <td style="color:#7eb8f7">${Number(x.myShare || 0)}%</td>
+            <td style="color:#ff7850">${fKz(x.myCapital)}</td>
+            <td style="color:#555">${fKz(x.partnerCapital)}</td>
+            <td style="color:#777">${x.responsible || "—"}</td>
+            <td style="color:#50c878;font-weight:700">${x.currentValue != null ? fKz(x.currentValue) : fKz(x.myCapital)}</td>
+            <td>${x.status === "fechado" ? '<span class="cat-badge red">FECHADO</span>' : '<span class="cat-badge green">ACTIVO</span>'}</td>
+            <td style="display:flex;gap:4px">
+              <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="openModal('investment','${x.id}')">✎</button>
+              <button class="btn-d" onclick="del('hub_investments','${x.id}')">✕</button>
+            </td>
+          </tr>`).join("")}</tbody>
+        </table></div>`}
+      </div>
+
+      ${modal === "investment" ? (() => {
+        const editing = modalState?.editId ? (db.hub_investments || []).find(x => String(x.id) === String(modalState.editId)) : null;
+        return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+          <div class="modal-title">${editing ? "EDITAR INVESTIMENTO" : "NOVO INVESTIMENTO"}</div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div class="field"><label>Negócio *</label><input id="m-name" placeholder="ex: Óleo para revenda" value="${editing?.name || ""}"/></div>
+            <div class="field"><label>Parceiro(a) *</label><input id="m-partner" placeholder="Nome do parceiro" value="${editing?.partner || ""}"/></div>
+            <div class="field"><label>Minha participação (%) *</label><input type="number" id="m-myShare" min="0" max="100" step="0.01" value="${editing?.myShare ?? ""}" placeholder="ex: 50"/></div>
+            <div class="field"><label>Meu capital (Kz) *</label><input type="number" id="m-myCapital" min="0" step="0.01" value="${editing?.myCapital ?? ""}" placeholder="ex: 100000"/></div>
+            <div class="field"><label>Capital do parceiro (Kz)</label><input type="number" id="m-partnerCapital" min="0" step="0.01" value="${editing?.partnerCapital ?? ""}" placeholder="ex: 100000"/></div>
+            <div class="field"><label>Responsável pela operação</label><select id="m-responsible"><option ${editing?.responsible === "Eu" ? "selected" : ""}>Eu</option><option ${editing?.responsible === "Parceiro(a)" ? "selected" : ""}>Parceiro(a)</option></select></div>
+            <div class="field"><label>Valor actual da minha participação (Kz)</label><input type="number" id="m-currentValue" min="0" step="0.01" value="${editing?.currentValue ?? ""}" placeholder="Vazio = usar meu capital"/></div>
+            <div class="field"><label>Data</label><input type="date" id="m-date" value="${editing?.date || today()}"/></div>
+            <div class="field"><label>Notas</label><input id="m-notes" value="${editing?.notes || ""}" placeholder="Opcional..."/></div>
+          </div>
+          <div style="display:flex;gap:12px;margin-top:20px">
+            <button class="btn-p" style="flex:1" onclick="saveModal_investment()">GUARDAR</button>
+            <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+          </div>
+        </div></div>`;
+      })() : ""}`;
+    }
+    window.saveModal_investment = async function () {
+      const name = gv("name")?.trim();
+      const partner = gv("partner")?.trim();
+      const myShare = parseFloat(gv("myShare") || 0);
+      const myCapital = parseFloat(gv("myCapital") || 0);
+      if (!name || !partner) return alert("Negócio e parceiro obrigatórios.");
+      if (myShare <= 0 || myShare > 100) return alert("A participação deve estar entre 0 e 100%.");
+      if (myCapital <= 0) return alert("Indica o teu capital.");
+      const editing = modalState?.editId ? (db.hub_investments || []).find(x => String(x.id) === String(modalState.editId)) : null;
+      const currentValue = gv("currentValue") ? parseFloat(gv("currentValue")) : null;
+      await saveDoc("hub_investments", {
+        id: editing?.id || uid(), name, partner, myShare, myCapital,
+        partnerCapital: parseFloat(gv("partnerCapital") || 0),
+        responsible: gv("responsible"), currentValue,
+        status: editing?.status || "activo",
+        date: gv("date") || today(), notes: gv("notes"),
+      });
+      modal = null; render();
+    };
+
+    // ── APLICAÇÕES FINANCEIRAS (DEPÓSITOS A PRAZO) ─────────────────────
+    function pageAplicacoes() {
+      const items = [...(db.hub_deposits || [])].sort((a, b) => new Date(b.startDate || 0) - new Date(a.startDate || 0));
+      const active = items.filter(x => !x.status || x.status === "Em aplicação");
+      const capital = active.reduce((s, x) => s + Number(x.amount || 0), 0);
+      const expected = active.reduce((s, x) => s + Number(x.expectedValue || x.amount || 0), 0);
+      const now = new Date();
+      const alerts = active.filter(x => {
+        if (!x.maturityDate) return false;
+        const days = Math.round((new Date(x.maturityDate) - now) / 86400000);
+        return days <= 15;
+      });
+
+      return `
+      <div class="grid4" style="margin-bottom:20px">
+        ${sc("Capital Aplicado", fKz(capital), "#ff7850", "▼")}
+        ${sc("Valor Esperado", fKz(expected), "#50c878", "▲")}
+        ${sc("Juros Previstos", fKz(expected - capital), "#c9a84c", "◆")}
+        ${sc("A Vencer (15 dias)", alerts.length, alerts.length ? "#ff7850" : "#7eb8f7", "⏳")}
+      </div>
+
+      ${alerts.length ? `<div class="card" style="margin-bottom:16px;border-color:#ff785066;color:#ffb090"><strong>⏳ Alertas de vencimento</strong>${alerts.map(x => { const days = Math.round((new Date(x.maturityDate) - now) / 86400000); return `<div style="font-size:11px;margin-top:6px;color:#aaa">${x.institution} — ${fKz(x.amount)} ${days < 0 ? `vencido há ${Math.abs(days)} dia(s)` : `vence em ${days} dia(s)`} (${fDate(x.maturityDate)})</div>`; }).join("")}</div>` : ""}
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="sec-title" style="margin:0">Depósitos a Prazo</div>
+          <button class="btn-p" onclick="openModal('deposit')">+ APLICAÇÃO</button>
+        </div>
+        <div style="font-size:11px;color:#666;margin-bottom:12px">O capital aplicado entra no património como aplicação — evita que fique esquecido.</div>
+        ${items.length === 0 ? empty("Sem aplicações registadas") : `
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Instituição</th><th>Capital</th><th>Início</th><th>Vencimento</th><th>Taxa</th><th>Valor Esperado</th><th>Estado</th><th></th></tr></thead>
+          <tbody>${items.map(x => {
+            const isActive = !x.status || x.status === "Em aplicação";
+            const days = x.maturityDate ? Math.round((new Date(x.maturityDate) - now) / 86400000) : null;
+            return `<tr>
+              <td style="font-weight:700;color:#e8e4d9">${x.institution}</td>
+              <td style="color:#ff7850">${fKz(x.amount)}</td>
+              <td style="color:#777">${fDate(x.startDate)}</td>
+              <td style="color:${days !== null && days <= 15 ? "#ff7850" : "#777"}">${fDate(x.maturityDate)}${days !== null && isActive && days <= 15 ? (days < 0 ? ' <span class="cat-badge red">VENCIDO</span>' : ' <span class="cat-badge red">VENCE EM ' + days + 'D</span>') : ""}</td>
+              <td style="color:#c9a84c">${x.rate ? x.rate + "%" : "—"}</td>
+              <td style="color:#50c878;font-weight:700">${fKz(x.expectedValue || x.amount)}</td>
+              <td>${isActive ? '<span class="cat-badge green">EM APLICAÇÃO</span>' : '<span class="cat-badge red">RESGATADO</span>'}</td>
+              <td style="display:flex;gap:4px">
+                <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="openModal('deposit','${x.id}')">✎</button>
+                <button class="btn-d" onclick="del('hub_deposits','${x.id}')">✕</button>
+              </td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table></div>`}
+      </div>
+
+      ${modal === "deposit" ? (() => {
+        const editing = modalState?.editId ? (db.hub_deposits || []).find(x => String(x.id) === String(modalState.editId)) : null;
+        return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+          <div class="modal-title">${editing ? "EDITAR APLICAÇÃO" : "NOVA APLICAÇÃO"}</div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div class="field"><label>Instituição *</label><input id="m-institution" placeholder="ex: BFA" value="${editing?.institution || ""}"/></div>
+            <div class="field"><label>Capital aplicado (Kz) *</label><input type="number" id="m-amount" min="0" step="0.01" value="${editing?.amount ?? ""}" placeholder="ex: 500000"/></div>
+            <div class="field"><label>Data de início</label><input type="date" id="m-startDate" value="${editing?.startDate || today()}"/></div>
+            <div class="field"><label>Vencimento</label><input type="date" id="m-maturityDate" value="${editing?.maturityDate || ""}"/></div>
+            <div class="field"><label>Taxa (%)</label><input type="number" id="m-rate" min="0" step="0.01" value="${editing?.rate ?? ""}" placeholder="ex: 8"/></div>
+            <div class="field"><label>Valor esperado no vencimento (Kz)</label><input type="number" id="m-expectedValue" min="0" step="0.01" value="${editing?.expectedValue ?? ""}" placeholder="Vazio = usar capital"/></div>
+            <div class="field"><label>Estado</label><select id="m-status"><option ${editing?.status === "Em aplicação" || !editing ? "selected" : ""}>Em aplicação</option><option ${editing?.status === "Resgatado" ? "selected" : ""}>Resgatado</option></select></div>
+            <div class="field"><label>Notas</label><input id="m-notes" value="${editing?.notes || ""}" placeholder="Opcional..."/></div>
+          </div>
+          <div style="display:flex;gap:12px;margin-top:20px">
+            <button class="btn-p" style="flex:1" onclick="saveModal_deposit()">GUARDAR</button>
+            <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+          </div>
+        </div></div>`;
+      })() : ""}`;
+    }
+    window.saveModal_deposit = async function () {
+      const institution = gv("institution")?.trim();
+      const amount = parseFloat(gv("amount") || 0);
+      if (!institution || amount <= 0) return alert("Instituição e capital obrigatórios.");
+      const editing = modalState?.editId ? (db.hub_deposits || []).find(x => String(x.id) === String(modalState.editId)) : null;
+      await saveDoc("hub_deposits", {
+        id: editing?.id || uid(), institution, amount,
+        startDate: gv("startDate") || today(), maturityDate: gv("maturityDate"),
+        rate: parseFloat(gv("rate") || 0) || null,
+        expectedValue: gv("expectedValue") ? parseFloat(gv("expectedValue")) : null,
+        status: gv("status") || "Em aplicação", notes: gv("notes"),
+      });
+      modal = null; render();
+    };
 
     function pageEmprestimos() {
       const loans = [...db.hub_loans].sort((a, b) => new Date(b.date) - new Date(a.date)); const active = loans.filter(l => !l.returned);
