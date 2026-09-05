@@ -25,11 +25,11 @@
     };
 
     // ── COLLECTIONS ────────────────────────────────────────────────────
-    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "hub_investments", "hub_deposits", "sales", "lots", "wallets", "accounts", "hub_notes", "clients", "settings"];
+    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "hub_investments", "hub_deposits", "hub_obligations", "sales", "lots", "wallets", "accounts", "hub_notes", "clients", "settings"];
     const DEFAULT_SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
 
     let app, db_fire, auth, currentUser = null;
-    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], hub_investments: [], hub_deposits: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [], settings: [] };
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], hub_investments: [], hub_deposits: [], hub_obligations: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [], settings: [] };
 
     // ── FIREBASE INIT ──────────────────────────────────────────────────
     async function initAppAndAuth() {
@@ -128,6 +128,7 @@
       { id: "investimentos", label: "Investimentos", icon: "⬢" },
       { id: "aplicacoes", label: "Aplicações", icon: "⏳" },
       { id: "emprestimos", label: "Empréstimos", icon: "💵" },
+      { id: "insights", label: "Inteligência", icon: "✦" },
       { id: "calculadora", label: "Calculadora", icon: "⊕" },
       { id: "definicoes", label: "Definições", icon: "⚙" },
     ];
@@ -320,6 +321,12 @@
       // Nota: entradas/saídas pessoais já movimentam o saldo das contas — não são somadas aqui (evitar dupla contagem).
       return kbWalletsKz() + kbAccountsKz() + taxiCarValue() + (taxiIn - taxiOperatingTotal()) + importProfitTotal() + importStockValue() + investmentsValue() + depositsValue();
     }
+    function obligationsValue() {
+      return (db.hub_obligations || []).filter(x => !x.status || x.status === "Em dívida").reduce((s, x) => s + Number(x.amount || 0), 0);
+    }
+    function netWorth() {
+      return patrimonio() - obligationsValue();
+    }
 
     // ══════════════════════════════════════════════════════════════════
     //  PAGES
@@ -334,6 +341,7 @@
         case "investimentos": return pageInvestimentos();
         case "aplicacoes": return pageAplicacoes();
         case "emprestimos": return pageEmprestimos();
+        case "insights": return pageInsights();
         case "calculadora": return pageCalculadora();
         case "definicoes": return pageDefinicoes();
         default: return "";
@@ -344,6 +352,7 @@
     function pageResumo() {
       const meta = 2000000;
       const total = patrimonio();
+      const liquid = netWorth();
       const pct = Math.min(100, (total / meta) * 100).toFixed(1);
       const falta = Math.max(0, meta - total);
 
@@ -368,6 +377,7 @@
           <div>
             <div style="font-size:10px;color:#c9a84c;letter-spacing:3px;margin-bottom:6px">META PATRIMONIAL 2026</div>
             <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:#e8e4d9">${fKz(total)}</div>
+            <div style="font-size:12px;color:#50c878;margin-top:4px">Património Líquido: <span style="font-weight:700">${fKz(liquid)}</span>${obligationsValue() > 0 ? ` · Obrigações: <span style="color:#ff7850">${fKz(obligationsValue())}</span>` : ""}</div>
             <div style="font-size:12px;color:#555;margin-top:4px">Faltam <span style="color:#c9a84c">${fKz(falta)}</span> para os 2.000.000 Kz</div>
           </div>
           <div style="font-family:'Syne',sans-serif;font-size:32px;font-weight:800;color:${pct >= 100 ? "#50c878" : "#c9a84c"}">${pct}%</div>
@@ -400,7 +410,9 @@
         <div style="font-size:10px;color:#c9a84c;letter-spacing:2px;margin:12px 0 6px">ATIVOS</div>
         <div class="row"><span>Carro do Táxi (valor estimado actual)</span><span style="color:#c084fc">${fKz(taxiCarValue())}</span></div>
         <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">          
-          <div class="row bold"><span>TOTAL (é teu)</span><span style="color:#c9a84c;font-size:15px">${fKz(total)}</span></div>
+          <div class="row bold"><span>TOTAL (activos, é teu)</span><span style="color:#c9a84c;font-size:15px">${fKz(total)}</span></div>
+          <div class="row"><span style="color:#ff7850">Obrigações (dívidas)</span><span style="color:#ff7850">- ${fKz(obligationsValue())}</span></div>
+          <div class="row bold"><span>PATRIMÓNIO LÍQUIDO</span><span style="color:#50c878;font-size:15px">${fKz(liquid)}</span></div>
           <div class="row"><span style="color:#555">Em custódia (não é teu)</span><span style="color:#ff7850">- ${fKz(custodiaAtiva)}</span></div>
         </div>
       </div>
@@ -1280,6 +1292,62 @@
       modal = null; render();
     };
 
+    // ── INTELIGÊNCIA FINANCEIRA ─────────────────────────────────────────
+    function pageInsights() {
+      const now = new Date();
+      const period = "month";
+      const kambioProfit = db.sales.filter(s => (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const taxiIn = db.hub_taxi.filter(x => inPeriod(x.date, period)).reduce((s, x) => s + Number(x.amount || 0), 0);
+      const taxiCost = db.hub_taxi_costs.filter(x => !isTaxiInvestment(x) && inPeriod(x.date, period)).reduce((s, x) => s + Number(x.amount || 0), 0);
+      const taxiProfit = taxiIn - taxiCost;
+      const importProfit = db.hub_imports.filter(i => i.status === "vendido" && inPeriod(i.orderDate, period)).reduce((s, i) => s + Number(i.profitKz || 0), 0);
+
+      const pendingSales = db.sales.filter(s => s.pendingPayment && !s.pendingPaid);
+      const overdueLoans = db.hub_loans.filter(l => !l.returned && l.dueDate && new Date(l.dueDate) < now);
+      const overdueObligations = (db.hub_obligations || []).filter(x => (!x.status || x.status === "Em dívida") && x.dueDate && new Date(x.dueDate) < now);
+      const maturingDeposits = (db.hub_deposits || []).filter(x => (!x.status || x.status === "Em aplicação") && x.maturityDate && Math.round((new Date(x.maturityDate) - now) / 86400000) <= 15);
+
+      const stockByAsset = {};
+      db.lots.filter(l => Number(l.remaining || 0) > 0).forEach(l => { const a = l.asset || "USDT"; stockByAsset[a] = (stockByAsset[a] || 0) + Number(l.remaining || 0); });
+      const stockMin = Number((db.settings || []).find(s => s.id === "stock-minimum")?.value || 0);
+      const lowStock = Object.entries(stockByAsset).filter(([, v]) => stockMin > 0 && v < stockMin);
+
+      const walletValue = {};
+      db.wallets.forEach(w => { const asset = w.asset || "USDT"; const stock = db.lots.filter(l => String(l.walletId) === String(w.id) && Number(l.remaining || 0) > 0).reduce((t, l) => t + Number(l.remaining || 0), 0); walletValue[w.id] = stock * avgBuyRate(asset); });
+      const totalWallet = Object.values(walletValue).reduce((s, v) => s + v, 0);
+      const topWallet = db.wallets.map(w => ({ name: w.name, value: walletValue[w.id] || 0 })).sort((a, b) => b.value - a.value)[0];
+
+      const businesses = [["Kâmbio", kambioProfit], ["Táxi", taxiProfit], ["Importação", importProfit]];
+      const maxBiz = Math.max(...businesses.map(b => Math.abs(b[1])), 1);
+      const insights = [];
+      if (pendingSales.length) insights.push(`${pendingSales.length} venda(s) por confirmar — total ${fKz(pendingSales.reduce((s, x) => s + pendingSaleAmount(x), 0))}.`);
+      if (overdueLoans.length) insights.push(`${overdueLoans.length} empréstimo(s) em atraso por receber.`);
+      if (overdueObligations.length) insights.push(`${overdueObligations.length} obrigação(ões) vencida(s) por pagar.`);
+      if (maturingDeposits.length) insights.push(`${maturingDeposits.length} depósito(s) a prazo a vencer nos próximos 15 dias.`);
+      if (lowStock.length) insights.push(`Stock baixo: ${lowStock.map(([a, v]) => `${a} (${v.toFixed(2)})`).join(", ")}.`);
+      if (topWallet && totalWallet > 0 && topWallet.value / totalWallet > 0.6) insights.push(`Concentração alta: ${Math.round(topWallet.value / totalWallet * 100)}% do capital cripto está em ${topWallet.name}.`);
+      if (!insights.length) insights.push("Sem alertas. A estrutura financeira está estável.");
+
+      return `
+      <div class="grid4" style="margin-bottom:20px">
+        ${sc("Lucro Kâmbio (mês)", fKz(kambioProfit), kambioProfit >= 0 ? "#7eb8f7" : "#ff5050", "▣")}
+        ${sc("Lucro Táxi (mês)", fKz(taxiProfit), taxiProfit >= 0 ? "#c084fc" : "#ff5050", "◉")}
+        ${sc("Lucro Importação (mês)", fKz(importProfit), importProfit >= 0 ? "#50c878" : "#ff5050", "◈")}
+        ${sc("Alertas", insights.length - (insights[0].startsWith("Sem alertas") ? 1 : 0), "#ff7850", "✦")}
+      </div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div class="sec-title">Comparação de Negócios (mês)</div>
+        ${businesses.map(([label, value]) => `<div style="display:flex;align-items:center;gap:10px;margin:10px 0"><span style="width:110px">${label}</span><div style="flex:1;background:#1a1a2e;height:8px"><div style="height:100%;width:${Math.max(0, Math.min(100, Math.abs(value) / maxBiz * 100))}%;background:${value >= 0 ? "#50c878" : "#ff5050"}"></div></div><strong style="color:${value >= 0 ? "#50c878" : "#ff5050"}">${fKz(value)}</strong></div>`).join("")}
+      </div>
+
+      <div class="card">
+        <div class="sec-title">✨ Insights e Recomendações</div>
+        <div style="font-size:11px;color:#666;margin-bottom:10px">Gerados automaticamente a partir dos dados reais do sistema. Não substituem a tua decisão.</div>
+        ${insights.map(t => `<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid #111;font-size:12px;color:#ccc"><span style="color:#c9a84c">✦</span><span>${t}</span></div>`).join("")}
+      </div>`;
+    }
+
     function pageEmprestimos() {
       const loans = [...db.hub_loans].sort((a, b) => new Date(b.date) - new Date(a.date)); const active = loans.filter(l => !l.returned);
       const returned = loans.filter(l => l.returned);
@@ -1355,7 +1423,49 @@
         </div>`: ""}
       </div>
 
+      <div class="card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="sec-title" style="margin:0">Obrigações — Dívidas Minhas</div>
+          <button class="btn-p" onclick="openModal('obligation')">+ OBRIGAÇÃO</button>
+        </div>
+        <div style="font-size:11px;color:#666;margin-bottom:12px">Dinheiro que deves a terceiros. Estas dívidas reduzem o teu Património Líquido.</div>
+        ${(db.hub_obligations || []).length === 0 ? empty("Sem obrigações registadas") : `
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Credor</th><th>Valor</th><th>Data</th><th>Prazo</th><th>Estado</th><th></th></tr></thead>
+          <tbody>${[...(db.hub_obligations || [])].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).map(x => `<tr>
+            <td style="font-weight:700;color:#e8e4d9">${x.creditor}</td>
+            <td style="color:#ff7850;font-weight:700">${fKz(x.amount)}</td>
+            <td style="color:#777">${fDate(x.date)}</td>
+            <td style="color:#777">${x.dueDate ? fDate(x.dueDate) : "—"}</td>
+            <td>${x.status === "Paga" ? '<span class="cat-badge green">PAGA</span>' : '<span class="cat-badge red">EM DÍVIDA</span>'}</td>
+            <td style="display:flex;gap:4px">
+              <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="openModal('obligation','${x.id}')">✎</button>
+              <button class="btn-d" onclick="del('hub_obligations','${x.id}')">✕</button>
+            </td>
+          </tr>`).join("")}</tbody>
+        </table></div>`}
+      </div>
+
       ${modal === "loan" ? loanModal() : ""}
+
+      ${modal === "obligation" ? (() => {
+        const editing = modalState?.editId ? (db.hub_obligations || []).find(x => String(x.id) === String(modalState.editId)) : null;
+        return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+          <div class="modal-title">${editing ? "EDITAR OBRIGAÇÃO" : "NOVA OBRIGAÇÃO"}</div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div class="field"><label>Credor *</label><input id="m-creditor" placeholder="A quem deves" value="${editing?.creditor || ""}"/></div>
+            <div class="field"><label>Valor (Kz) *</label><input type="number" id="m-amount" min="0" step="0.01" value="${editing?.amount ?? ""}" placeholder="ex: 100000"/></div>
+            <div class="field"><label>Data</label><input type="date" id="m-date" value="${editing?.date || today()}"/></div>
+            <div class="field"><label>Prazo</label><input type="date" id="m-dueDate" value="${editing?.dueDate || ""}"/></div>
+            <div class="field"><label>Estado</label><select id="m-status"><option ${editing?.status !== "Paga" ? "selected" : ""}>Em dívida</option><option ${editing?.status === "Paga" ? "selected" : ""}>Paga</option></select></div>
+            <div class="field"><label>Notas</label><input id="m-notes" value="${editing?.notes || ""}" placeholder="Opcional..."/></div>
+          </div>
+          <div style="display:flex;gap:12px;margin-top:20px">
+            <button class="btn-p" style="flex:1" onclick="saveModal_obligation()">GUARDAR</button>
+            <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+          </div>
+        </div></div>`;
+      })() : ""}
 
 
       ${modal === "loan-payment" ? (() => {
@@ -1437,6 +1547,21 @@
       if (!account) return;
       await saveDoc("accounts", { ...account, balance: Number(account.balance) + pendingSaleAmount(sale) });
       await saveDoc("sales", { ...sale, pendingPaid: true, accountId: String(accountId) });
+      modal = null; render();
+    };
+
+    window.saveModal_obligation = async function () {
+      const creditor = document.getElementById("m-creditor")?.value?.trim();
+      const amount = parseFloat(document.getElementById("m-amount")?.value || 0);
+      if (!creditor || amount <= 0) return alert("Credor e valor obrigatórios.");
+      const editing = modalState?.editId ? (db.hub_obligations || []).find(x => String(x.id) === String(modalState.editId)) : null;
+      await saveDoc("hub_obligations", {
+        id: editing?.id || uid(), creditor, amount,
+        date: document.getElementById("m-date")?.value || today(),
+        dueDate: document.getElementById("m-dueDate")?.value || "",
+        status: document.getElementById("m-status")?.value || "Em dívida",
+        notes: document.getElementById("m-notes")?.value || "",
+      });
       modal = null; render();
     };
 

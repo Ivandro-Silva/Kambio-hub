@@ -31,7 +31,7 @@
     };
     // ══════════════════════════════════════════════════════════════════
 
-    const COLLECTIONS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_taxi_costs", "hub_imports", "hub_loans", "hub_investments", "hub_deposits", "lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
+    const COLLECTIONS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_taxi_costs", "hub_imports", "hub_loans", "hub_investments", "hub_deposits", "hub_obligations", "lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
     const RESET_COLLECTIONS = ["lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
     const DEFAULT_SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
     const DEFAULT_WALLETS = ["RedotPay", "Binance", "Bybit", "Kast", "Grey"];
@@ -44,7 +44,7 @@
       { name: "É-Kwanza", type: "negocio" },
     ];
     let app, db_fire, auth, currentUser = null;
-    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_taxi_costs: [], hub_imports: [], hub_loans: [], hub_investments: [], hub_deposits: [], lots: [], sales: [], intermediations: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], hub_notes: [], settings: [], opening_balances: [] };
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_taxi_costs: [], hub_imports: [], hub_loans: [], hub_investments: [], hub_deposits: [], hub_obligations: [], lots: [], sales: [], intermediations: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], hub_notes: [], settings: [], opening_balances: [] };
     let unsubscribers = [];
 
     // ── LOCAL FALLBACK (quando Firebase não está configurado) ──────────
@@ -2167,7 +2167,7 @@
       return window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
     }
     function spreadsheetCollections(workbook) {
-      const aliases = { clients: ["clients", "clientes"], wallets: ["wallets", "carteiras"], lots: ["lots", "lotes"], sales: ["sales", "vendas"], transfers: ["transfers", "transferencias"], intermediations: ["intermediations", "intermediacao"], accounts: ["accounts", "contas"], suppliers: ["suppliers", "fornecedores"], affiliates: ["affiliates", "afiliados"], notes: ["notes", "notas"], hub_notes: ["hub notes", "comentarios"], hub_income: ["hub income", "entradas"], hub_expenses: ["hub expenses", "saidas"], hub_taxi: ["hub taxi", "taxi"], hub_taxi_costs: ["hub taxi costs"], hub_imports: ["hub imports", "importacao"], hub_custody: ["hub custody", "custodia"], hub_loans: ["hub loans", "emprestimos"], hub_investments: ["hub investments", "investimentos"], hub_deposits: ["hub deposits", "depositos", "aplicacoes"], settings: ["settings", "definicoes"], opening_balances: ["opening balances", "saldos iniciais"] };
+      const aliases = { clients: ["clients", "clientes"], wallets: ["wallets", "carteiras"], lots: ["lots", "lotes"], sales: ["sales", "vendas"], transfers: ["transfers", "transferencias"], intermediations: ["intermediations", "intermediacao"], accounts: ["accounts", "contas"], suppliers: ["suppliers", "fornecedores"], affiliates: ["affiliates", "afiliados"], notes: ["notes", "notas"], hub_notes: ["hub notes", "comentarios"], hub_income: ["hub income", "entradas"], hub_expenses: ["hub expenses", "saidas"], hub_taxi: ["hub taxi", "taxi"], hub_taxi_costs: ["hub taxi costs"], hub_imports: ["hub imports", "importacao"], hub_custody: ["hub custody", "custodia"], hub_loans: ["hub loans", "emprestimos"],       hub_investments: ["hub investments", "investimentos"], hub_deposits: ["hub deposits", "depositos", "aplicacoes"], hub_obligations: ["hub obligations", "obrigacoes", "dividas"], settings: ["settings", "definicoes"], opening_balances: ["opening balances", "saldos iniciais"] };
       const result = {};
       for (const sheetName of workbook.SheetNames) {
         const rows = sheetRows(workbook.Sheets[sheetName]);
