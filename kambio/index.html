@@ -1359,11 +1359,22 @@
 
     // ── CLIENTS ────────────────────────────────────────────────────────
     function pageClients() {
+      const digits = v => String(v || "").replace(/\D/g, "");
+      const noWallet = db.clients.filter(c => !(c.walletIds || []).length);
+      const noKz = db.clients.filter(c => !c.kzAccount?.iban && !c.kzAccount?.number);
+      const noPhone = db.clients.filter(c => !digits(c.phone));
+      const thirdParty = db.clients.filter(c => c.thirdPartyAccount);
       return `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
     <div style="font-size:11px;color:#555;letter-spacing:2px">${db.clients.length} CLIENTES</div>
     <button class="btn-primary" onclick="openModal('new-client')">+ NOVO CLIENTE</button>
   </div>
+  ${(noWallet.length || noKz.length || noPhone.length) ? `<div class="card" style="margin-bottom:14px;border-color:#ff785066">
+    <div style="font-size:10px;color:#ff7850;letter-spacing:2px;margin-bottom:8px">⚠ DADOS INCOMPLETOS</div>
+    ${noWallet.length ? `<div style="font-size:12px;color:#ccc;margin-bottom:4px">${noWallet.length} cliente(s) sem carteira cripto: ${noWallet.slice(0, 8).map(c => `<span style="cursor:pointer;text-decoration:underline dotted;color:#e8e4d9" onclick="openModal('view-client','${c.id}')">${c.name}</span>`).join(", ")}${noWallet.length > 8 ? "…" : ""}</div>` : ""}
+    ${noKz.length ? `<div style="font-size:12px;color:#ccc;margin-bottom:4px">${noKz.length} cliente(s) sem conta KZ/IBAN: ${noKz.slice(0, 8).map(c => `<span style="cursor:pointer;text-decoration:underline dotted;color:#e8e4d9" onclick="openModal('view-client','${c.id}')">${c.name}</span>`).join(", ")}${noKz.length > 8 ? "…" : ""}</div>` : ""}
+    ${noPhone.length ? `<div style="font-size:12px;color:#ccc">${noPhone.length} cliente(s) sem telefone: ${noPhone.slice(0, 8).map(c => `<span style="cursor:pointer;text-decoration:underline dotted;color:#e8e4d9" onclick="openModal('view-client','${c.id}')">${c.name}</span>`).join(", ")}${noPhone.length > 8 ? "…" : ""}</div>` : ""}
+  </div>` : ""}
   <div class="field" style="margin-bottom:16px">
     <input id="client-search" placeholder="🔍 Pesquisar por nome, telefone, grupo, quem adicionou ou carteira..." value="${clientSearch}" oninput="searchClients(this.value)"/>
   </div>
@@ -1373,11 +1384,13 @@
     }
 
     function buildClientsTable() {
+      const digits = v => String(v || "").replace(/\D/g, "");
       const q = clientSearch.trim().toLowerCase();
+      const qDigits = digits(clientSearch);
       const filtered = db.clients.filter(c => {
         if (!q) return true;
-        const hay = [c.name, c.phone, c.groupName, c.addedBy, ...(c.walletIds || [])].join(" ").toLowerCase();
-        return hay.includes(q);
+        const hay = [c.name, c.phone, digits(c.phone), c.groupName, c.addedBy, ...(c.walletIds || [])].join(" ").toLowerCase();
+        return hay.includes(q) || (qDigits && digits(c.phone).includes(qDigits));
       }).sort((a, b) => Number(a.id) - Number(b.id));
       return `<div class="card" style="overflow-x:auto">
       ${filtered.length === 0 ? '<div class="empty">SEM CLIENTES (ou sem resultados para a pesquisa)</div>' : `
@@ -1389,7 +1402,7 @@
         const referrer = db.clients.find(x => String(x.id) === String(c.addedByClientId));
         return `<tr>
           <td style="color:#555">${idx + 1}</td>
-          <td style="font-weight:700;color:#e8e4d9;cursor:pointer;text-decoration:underline;text-decoration-style:dotted" onclick="openModal('view-client','${c.id}')">${c.name}</td>
+          <td style="font-weight:700;color:#e8e4d9;cursor:pointer;text-decoration:underline;text-decoration-style:dotted" onclick="openModal('view-client','${c.id}')">${c.name}${c.thirdPartyAccount ? ' <span class="cat-badge red" style="font-size:8px">⚠ CONTA DE TERCEIRO</span>' : ""}</td>
           <td style="color:#777">${c.phone || "—"}</td>
           <td style="color:#7eb8f7">${c.groupName || "—"}</td>
           <td style="color:#777">${referrer?.name || c.addedBy || "Administrador"}</td>
@@ -1429,7 +1442,9 @@
         <div class="row"><span>Telefone / WhatsApp</span><span>${c.phone || "—"}</span></div>
         <div class="row"><span>Nome do Grupo</span><span style="color:#7eb8f7">${c.groupName || "—"}</span></div>
         <div class="row"><span>Quem Adicionou</span><span>${c.addedBy || "—"}</span></div>
+        ${c.thirdPartyAccount ? `<div class="row"><span>Conta de Terceiro</span><span style="color:#ff7850">⚠ Paga via conta de terceiros</span></div>` : ""}
         <div class="row"><span>Carteira Preferida</span><span style="color:#c084fc">${prefWallet ? `${prefWallet.name} (${prefWallet.asset || "USDT"})` : "—"}</span></div>
+        ${c.kzAccount ? `<div class="row"><span>Conta KZ</span><span style="color:#7eb8f7">${c.kzAccount.bank || ""}${c.kzAccount.number ? ` · ${c.kzAccount.number}` : ""}${c.kzAccount.iban ? ` · ${c.kzAccount.iban}` : ""}${c.kzAccount.holder ? ` (${c.kzAccount.holder})` : ""}</span></div>` : ""}
         <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
           <div class="row"><span>Nº de Compras</span><span style="color:#c9a84c">${ss.length}</span></div>
           <div class="row"><span>Volume Total</span><span style="color:#7eb8f7;font-weight:700">${fU(vol)}</span></div>
@@ -1463,6 +1478,15 @@
           </select>
         </div>
         <div class="field" style="margin-bottom:12px"><label>IDs/Endereços das Carteiras (uma por linha)</label><textarea id="nc-wallets" rows="3" style="resize:vertical" placeholder="ex: TXk3...abc&#10;0xAb12...">${(editing?.walletIds || []).join("\n")}</textarea></div>
+        <div style="grid-column:1/-1;border-top:1px solid #1a1a2e;padding-top:12px;font-size:10px;color:#c9a84c;letter-spacing:2px;margin-bottom:6px">CONTA DE PAGAMENTO EM KZ</div>
+        <div class="field" style="margin-bottom:12px"><label>Banco</label><input id="nc-kz-bank" placeholder="ex: BAI, BFA" value="${editing?.kzAccount?.bank || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>Titular</label><input id="nc-kz-holder" placeholder="Nome do titular" value="${editing?.kzAccount?.holder || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>Nº da Conta</label><input id="nc-kz-number" placeholder="ex: 005100009955974310161" value="${editing?.kzAccount?.number || ""}"/></div>
+        <div class="field" style="margin-bottom:12px"><label>IBAN</label><input id="nc-kz-iban" placeholder="ex: AO06..." value="${editing?.kzAccount?.iban || ""}"/></div>
+        <div class="field full" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:12px">
+          <input type="checkbox" id="nc-third-party" style="width:auto" ${editing?.thirdPartyAccount ? "checked" : ""}/>
+          <label style="margin:0;text-transform:none;font-size:12px;color:#ccc">Paga através de conta de terceiros</label>
+        </div>
         <div class="field" style="margin-bottom:20px"><label>Notas</label><textarea id="nc-notes" rows="3" style="resize:vertical">${editing?.notes || ""}</textarea></div>
         <div style="display:flex;gap:12px">
           <button class="btn-primary" style="flex:1" onclick="saveClient()">GUARDAR</button>
@@ -1482,6 +1506,14 @@
       const duplicate = db.clients.find(client => String(client.id) !== String(id) && (normalize(client.name) === normalizedName || (normalizedPhone && client.phone?.replace(/\D/g, "") === normalizedPhone)));
       if (duplicate) return alert(`Cliente duplicado: ${duplicate.name}. Verifica o nome ou telefone antes de guardar.`);
       const walletIds = (document.getElementById("nc-wallets")?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+      const kzAccount = {
+        bank: document.getElementById("nc-kz-bank")?.value?.trim() || "",
+        holder: document.getElementById("nc-kz-holder")?.value?.trim() || "",
+        number: document.getElementById("nc-kz-number")?.value?.trim() || "",
+        iban: document.getElementById("nc-kz-iban")?.value?.trim() || "",
+      };
+      if (!kzAccount.bank && !kzAccount.holder && !kzAccount.number && !kzAccount.iban) kzAccount = null;
+      const thirdPartyAccount = document.getElementById("nc-third-party")?.checked || false;
       const addedByClientId = document.getElementById("nc-addedby")?.value || "";
       if (String(addedByClientId) === String(id)) return alert("Um cliente não pode ser o seu próprio indicador.");
       let parentId = addedByClientId;
@@ -1498,6 +1530,8 @@
         addedByClientId: addedByClientId || null,
         preferredWalletId: document.getElementById("nc-prefwallet")?.value || "",
         walletIds,
+        kzAccount,
+        thirdPartyAccount,
         notes: document.getElementById("nc-notes")?.value || ""
       });
       closeModal();
@@ -2057,20 +2091,42 @@
           </div>
           ${sales.length === 0 ? '<div class="empty">SEM VENDAS</div>' : `
           <div style="overflow-x:auto;max-height:400px;overflow-y:auto"><table class="tbl">
-            <thead><tr><th>#</th><th>Data</th><th>USDT</th><th>Câmbio</th><th>Receita</th><th>Lucro</th></tr></thead>
+            <thead><tr><th>#</th><th>Data</th><th>USDT</th><th>Câmbio</th><th>Receita</th><th>Lucro</th><th></th></tr></thead>
             <tbody>${[...sales].sort((a, b) => new Date(a.createdAt || a.date) - new Date(b.createdAt || b.date)).map((s, idx) => `<tr>
               <td style="color:#555">${idx + 1}</td>
-              <td>${fDate(s.date)}${s.pendingPayment && !s.pendingPaid ? ' <span style="font-size:9px;color:#ff7850;border:1px solid #ff785044;padding:1px 5px;border-radius:2px">PENDENTE</span>' : ""}</td>
+              <td>${fDate(s.date)}${s.pendingPayment && !s.pendingPaid ? ' <span style="font-size:9px;color:#ff7850;border:1px solid #ff785044;padding:1px 5px;border-radius:2px">PENDENTE</span>' : ""}${s.refunded ? ' <span style="font-size:9px;color:#ff7850;border:1px solid #ff785044;padding:1px 5px;border-radius:2px">REEMBOLSADO</span>' : ""}</td>
               <td style="color:#7eb8f7">${fU(s.totalUsdt)}</td>
               <td style="color:#c9a84c">${Number(s.rateKz).toLocaleString()} Kz</td>
               <td>${fKz(s.totalRevenue)}</td>
               <td style="font-weight:700;color:${Number(s.totalProfit) >= 0 ? "#50c878" : "#ff5050"}">${fKz(s.totalProfit)}</td>
+              <td>${s.refunded ? "" : `<button class="btn-ghost" style="padding:4px 9px;font-size:10px" onclick="refundSale('${s.id}')">↩ REEMBOLSAR</button>`}</td>
             </tr>`).join("")}</tbody>
           </table></div>`}
         </div>
       </div>${monthlyProfitChart()}${spreadHistoryTable()}`;
     }
     window.setFinPeriod = function (p) { finPeriod = p; render(); };
+    window.refundSale = async function (id) {
+      const sale = db.sales.find(s => String(s.id) === String(id));
+      if (!sale) return alert("Venda não encontrada.");
+      if (sale.refunded) return alert("Esta venda já foi reembolsada.");
+      if (!confirm(`Reembolsar a venda de ${fU(sale.totalUsdt)} (${fKz(sale.totalRevenue)})? O stock voltará aos lotes e a conta será debitada.`)) return;
+      const updates = [];
+      let restoredLots = 0, skippedLots = 0;
+      for (const entry of sale.lotEntries || []) {
+        const lot = db.lots.find(l => String(l.id) === String(entry.lotId));
+        if (lot) { updates.push({ col: "lots", item: { ...lot, remaining: r8(Number(lot.remaining || 0) + Number(entry.usdt || 0)) } }); restoredLots++; }
+        else skippedLots++;
+      }
+      if (!sale.pendingPayment || sale.pendingPaid) {
+        const account = db.accounts.find(a => String(a.id) === String(sale.accountId));
+        if (account) updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) - Number(sale.totalRevenue || 0) } });
+      }
+      updates.push({ col: "sales", item: { ...sale, refunded: true, refundedAt: new Date().toISOString() } });
+      await bulkSave(updates);
+      alert(`✅ Reembolso registado.${skippedLots ? ` Atenção: ${skippedLots} lote(s) já não existiam e não foram restaurados.` : ""}`);
+      render();
+    };
 
     // ── SETTINGS ───────────────────────────────────────────────────────
     function pageSettings() {
@@ -2080,10 +2136,11 @@
           <div class="sec-title">Fornecedores Frequentes</div>
           ${db.suppliers.length === 0 ? '<div style="font-size:12px;color:#444;margin-bottom:12px">Sem fornecedores. Adiciona para seleccionar rapidamente ao comprar.</div>' : `
           <table class="tbl" style="margin-bottom:12px">
-            <thead><tr><th>Nome</th><th>Telefone</th><th></th></tr></thead>
+            <thead><tr><th>Nome</th><th>Telefone</th><th>Banco / Titular / IBAN</th><th></th></tr></thead>
             <tbody>${db.suppliers.map(s => `<tr>
               <td style="font-weight:700">${s.name}</td>
               <td style="color:#777">${s.phone || "—"}</td>
+              <td style="color:#555;font-size:11px">${s.bank || "—"}${s.holder ? ` · ${s.holder}` : ""}${s.iban ? ` · ${s.iban}` : ""}</td>
               <td style="display:flex;gap:4px">
                 <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="editSup('${s.id}')">✎</button>
                 <button class="btn-danger" onclick="delSup('${s.id}')">✕</button>
@@ -2091,9 +2148,12 @@
             </tr>`).join("")}</tbody>
           </table>`}
           <input type="hidden" id="ns-editid" value=""/>
-          <div style="display:flex;gap:8px">
-            <input id="ns-name" placeholder="Nome" style="flex:1"/>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="ns-name" placeholder="Nome" style="flex:1;min-width:120px"/>
             <input id="ns-phone" placeholder="Telefone" style="width:130px"/>
+            <input id="ns-bank" placeholder="Banco" style="width:100px"/>
+            <input id="ns-holder" placeholder="Titular" style="width:120px"/>
+            <input id="ns-iban" placeholder="IBAN" style="width:180px"/>
             <button class="btn-ghost" id="ns-submit" onclick="addSup()">+</button>
           </div>
         </div>
@@ -2163,10 +2223,9 @@
       const editId = document.getElementById("ns-editid")?.value;
       const n = document.getElementById("ns-name")?.value?.trim();
       if (!n) return;
-      await saveDoc("suppliers", { id: editId || uid(), name: n, phone: document.getElementById("ns-phone")?.value || "" });
+      await saveDoc("suppliers", { id: editId || uid(), name: n, phone: document.getElementById("ns-phone")?.value || "", bank: document.getElementById("ns-bank")?.value || "", holder: document.getElementById("ns-holder")?.value || "", iban: document.getElementById("ns-iban")?.value || "" });
       document.getElementById("ns-editid").value = "";
-      document.getElementById("ns-name").value = "";
-      document.getElementById("ns-phone").value = "";
+      ["ns-name", "ns-phone", "ns-bank", "ns-holder", "ns-iban"].forEach(id => document.getElementById(id).value = "");
       document.getElementById("ns-submit").textContent = "+";
     };
     window.editSup = (id) => {
@@ -2175,6 +2234,9 @@
       document.getElementById("ns-editid").value = s.id;
       document.getElementById("ns-name").value = s.name;
       document.getElementById("ns-phone").value = s.phone || "";
+      document.getElementById("ns-bank").value = s.bank || "";
+      document.getElementById("ns-holder").value = s.holder || "";
+      document.getElementById("ns-iban").value = s.iban || "";
       document.getElementById("ns-submit").textContent = "✓ ATUALIZAR";
     };
     function downloadFile(name, content, type) {

@@ -267,8 +267,13 @@
     window.go = go; window.toggleMenu = toggleMenu; window.closeMenu = closeMenu;
 
     // ── GOAL BAR ───────────────────────────────────────────────────────
+    function financialGoal() {
+      const g = db.settings?.find(s => s.id === "financial-goal");
+      return { name: g?.name || "Meta Patrimonial 2026", value: Number(g?.value || 2000000), deadline: g?.deadline || "" };
+    }
     function goalBar() {
-      const meta = 2000000;
+      const goal = financialGoal();
+      const meta = goal.value;
       const total = patrimonio();
       const pct = Math.min(100, (total / meta) * 100).toFixed(1);
       return `
@@ -368,7 +373,8 @@
 
     // ── RESUMO GERAL ───────────────────────────────────────────────────
     function pageResumo() {
-      const meta = 2000000;
+      const goal = financialGoal();
+      const meta = goal.value;
       const total = patrimonio();
       const liquid = netWorth();
       const pct = Math.min(100, (total / meta) * 100).toFixed(1);
@@ -393,10 +399,10 @@
       <div class="card" style="margin-bottom:20px;border-color:#c9a84c33;background:linear-gradient(135deg,#0f0f1a,#111120)">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
           <div>
-            <div style="font-size:10px;color:#c9a84c;letter-spacing:3px;margin-bottom:6px">META PATRIMONIAL 2026</div>
+            <div style="font-size:10px;color:#c9a84c;letter-spacing:3px;margin-bottom:6px">${goal.name.toUpperCase()}</div>
             <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:#e8e4d9">${fKz(total)}</div>
             <div style="font-size:12px;color:#50c878;margin-top:4px">Património Líquido: <span style="font-weight:700">${fKz(liquid)}</span>${obligationsValue() > 0 ? ` · Obrigações: <span style="color:#ff7850">${fKz(obligationsValue())}</span>` : ""}</div>
-            <div style="font-size:12px;color:#555;margin-top:4px">Faltam <span style="color:#c9a84c">${fKz(falta)}</span> para os 2.000.000 Kz</div>
+            <div style="font-size:12px;color:#555;margin-top:4px">Faltam <span style="color:#c9a84c">${fKz(falta)}</span> para os ${fKz(meta)}${goal.deadline ? ` · Prazo ${fDate(goal.deadline)}` : ""}</div>
           </div>
           <div style="font-family:'Syne',sans-serif;font-size:32px;font-weight:800;color:${pct >= 100 ? "#50c878" : "#c9a84c"}">${pct}%</div>
         </div>
@@ -1717,6 +1723,15 @@
       ];
       return `
       <div class="card" style="max-width:700px;margin:0 auto">
+        <div class="sec-title">🎯 Meta Financeira</div>
+        <div style="font-size:11px;color:#666;margin-bottom:12px">Define o teu objectivo. O progresso usa o teu património real.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+          <input id="goal-name" placeholder="Nome da meta" value="${financialGoal().name}" style="grid-column:1/-1"/>
+          <input id="goal-value" type="number" min="0" step="1000" placeholder="Valor (Kz)" value="${financialGoal().value}"/>
+          <input id="goal-deadline" type="date" value="${financialGoal().deadline}"/>
+          <button class="btn-p" onclick="saveFinancialGoal()">GUARDAR META</button>
+        </div>
+        <div style="border-top:1px solid #1a1a2e;margin-top:16px;padding-top:16px">
         <div class="sec-title">📝 Notas & Ideias de Melhorias</div>
         <div style="font-size:11px;color:#555;margin-bottom:14px">Regista aqui ideias, bugs a corrigir ou funcionalidades a implementar — tudo fica guardado no sistema.</div>
         <textarea id="hub-notes-text" rows="14" style="resize:vertical" placeholder="ex:&#10;- Adicionar gráfico de evolução mensal&#10;- Corrigir cálculo do breakeven do táxi&#10;- Ligar custódia ao dashboard principal">${db.hub_notes[0]?.text || ""}</textarea>
@@ -1736,6 +1751,16 @@
         </div>` : ""}
       </div>`;
     }
+    window.saveFinancialGoal = async function () {
+      const goal = financialGoal();
+      const name = document.getElementById("goal-name")?.value?.trim() || goal.name;
+      const value = parseFloat(document.getElementById("goal-value")?.value || 0);
+      const deadline = document.getElementById("goal-deadline")?.value || "";
+      if (value <= 0) return alert("Indica um valor de meta válido.");
+      await saveDoc("settings", { id: "financial-goal", name, value, deadline, updatedAt: new Date().toISOString() });
+      alert("✅ Meta financeira guardada.");
+      render();
+    };
 
     // ── CALCULADORA IMPORTAÇÃO ─────────────────────────────────────────
     function pageCalculadora() {
