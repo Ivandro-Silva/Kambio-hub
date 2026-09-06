@@ -30,6 +30,12 @@
 
     let app, db_fire, auth, currentUser = null;
     let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], hub_investments: [], hub_deposits: [], hub_obligations: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [], settings: [] };
+    let _busy = 0;
+    function busy(on) {
+      _busy = Math.max(0, _busy + (on ? 1 : -1));
+      const overlay = document.getElementById("busy-overlay");
+      if (overlay) overlay.style.display = _busy > 0 ? "flex" : "none";
+    }
 
     // ── FIREBASE INIT ──────────────────────────────────────────────────
     async function initAppAndAuth() {
@@ -63,15 +69,18 @@
     async function saveDoc(col, item) {
       const id = item.id ? String(item.id) : String(Date.now());
       const data = { ...item, id };
-      await setDoc(doc(db_fire, col, id), data);
+      busy(true);
+      try { await setDoc(doc(db_fire, col, id), data); } finally { busy(false); }
       return id;
     }
     async function delDoc(col, id) {
-      await deleteDoc(doc(db_fire, col, String(id)));
+      busy(true);
+      try { await deleteDoc(doc(db_fire, col, String(id))); } finally { busy(false); }
     }
 
     async function bulkSave(updates) {
-      for (const u of updates) await saveDoc(u.col, u.item);
+      busy(true);
+      try { for (const u of updates) await saveDoc(u.col, u.item); } finally { busy(false); }
     }
 
     function setStatus(s) {
@@ -98,11 +107,18 @@
     const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
-    function currentSplit(business = "global") {
+    function currentSplit(business = "global", dateStr) {
       const configured = db.settings?.find(item => item.id === "profit-splits") || db.settings?.find(item => item.id === "profit-split");
-      const selected = configured?.[business] || configured?.global || (configured?.id === "profit-split" ? configured : null);
+      let selected = configured?.[business] || configured?.global || (configured?.id === "profit-split" ? configured : null);
+      const history = db.settings?.find(item => item.id === "profit-split-history")?.history || [];
+      if (dateStr) {
+        const applicable = history.filter(h => (!h.business || h.business === business) && (!h.effectiveFrom || h.effectiveFrom <= dateStr)).sort((a, b) => String(a.effectiveFrom || "").localeCompare(String(b.effectiveFrom || "")));
+        const last = applicable[applicable.length - 1];
+        if (last) selected = last;
+      }
       return selected ? { ...DEFAULT_SPLIT, ...selected } : DEFAULT_SPLIT;
     }
+    function splitHistory() { return db.settings?.find(item => item.id === "profit-split-history")?.history || []; }
 
     const INCOME_CATS = ["Salário", "Serviços Extras", "Importação", "Táxi", "Outro"];
     const EXPENSE_CATS = ["Alimentação", "Transporte", "Telecomunicações", "Lazer", "Vestuário", "Cota Juventude", "Investimento", "Outro"];
@@ -206,6 +222,7 @@
         el.innerHTML = layout();
         attachAll();
       });
+      if (_busy > 0) { const overlay = document.getElementById("busy-overlay"); if (overlay) overlay.style.display = "flex"; }
     }
 
     function layout() {
@@ -240,7 +257,8 @@
         <div class="body">
           ${buildPage()}
         </div>
-      </div>`;
+      </div>
+      <div id="busy-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(8,8,15,.7);align-items:center;justify-content:center;flex-direction:column;gap:12px"><div style="width:34px;height:34px;border:3px solid #c9a84c33;border-top-color:#c9a84c;border-radius:50%;animation:spin 0.8s linear infinite"></div><div style="color:#c9a84c;font-size:11px;letter-spacing:2px">A GRAVAR...</div></div>`;
     }
 
     function go(p) { page = p; closeMenu(); render(); }
@@ -424,9 +442,9 @@
         </div>
       </div>
       <div class="grid3">
-         ${splitBox("Kâmbio Business", kambioProfitP, "#7eb8f7", "kambio")}
-         ${splitBox("Táxi", taxiLiquidP, "#c084fc", "taxi")}
-         ${splitBox("Importação", importProfitP, "#50c878", "importacao")}
+         ${splitBox("Kâmbio Business", kambioProfitP, "#7eb8f7", "kambio", periodEndDate(resumoPeriod))}
+         ${splitBox("Táxi", taxiLiquidP, "#c084fc", "taxi", periodEndDate(resumoPeriod))}
+         ${splitBox("Importação", importProfitP, "#50c878", "importacao", periodEndDate(resumoPeriod))}
       </div>`;
     }
 
@@ -445,11 +463,13 @@
       const cashBalance = cashAccount ? Number(cashAccount.balance || 0) : 0;
       const bankBalance = db.accounts.filter(a => a.type === "pessoal" && a.name !== "Dinheiro em Mãos").reduce((s, a) => s + Number(a.balance || 0), 0);
 
-      // Salário vs retirado, baseado no lucro da Kâmbio no período
+      // Salário disponível = salário KB + outras entradas − saídas (corrige saldo negativo incorreto)
        const kambioProfitP = db.sales.filter(s => (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
-       const salarioAlocado = kambioProfitP * currentSplit("kambio").salary;
-      const retiradoP = expenseP.reduce((s, x) => s + Number(x.amount || 0), 0);
-      const excedente = retiradoP - salarioAlocado;
+       const salarioKb = kambioProfitP * currentSplit("kambio", periodEndDate(period) || undefined).salary;
+       const outrasEntradasP = incomeP.filter(x => x.category !== "Salário").reduce((s, x) => s + Number(x.amount || 0), 0);
+       const disponivelP = salarioKb + outrasEntradasP;
+       const retiradoP = expenseP.reduce((s, x) => s + Number(x.amount || 0), 0);
+       const saldoP = disponivelP - retiradoP;
 
       // Resumo por categoria + subcategoria (gastos do período)
       const catTotals = {};
@@ -482,25 +502,27 @@
         <div style="font-size:12px;color:#ff7850">⚠ Ainda não existe uma conta "Dinheiro em Mãos" no Kâmbio. Cria-a em Kâmbio → Carteiras → Contas em Kwanzas (tipo Pessoal) para o saldo aparecer aqui corretamente.</div>
       </div>` : ""}
 
-      <div class="card" style="margin-bottom:20px;border-color:${excedente > 0 ? "#ff585033" : "#50c87833"}">
-        <div class="sec-title">💡 Salário vs. Retirada (${RP.find(p => p.id === period)?.label})</div>
+      <div class="card" style="margin-bottom:20px;border-color:${saldoP < 0 ? "#ff585033" : "#50c87833"}">
+        <div class="sec-title">💡 Salário Disponível para Saque (${RP.find(p => p.id === period)?.label})</div>
         <div class="grid2">
           <div>
             <div class="row"><span>Lucro Kâmbio no período</span><span style="color:#c9a84c">${fKz(kambioProfitP)}</span></div>
-             <div class="row"><span>Salário alocado (${Math.round(currentSplit().salary * 100)}%)</span><span style="color:#50c878;font-weight:700">${fKz(salarioAlocado)}</span></div>
-            <div class="row"><span>Total retirado (saídas)</span><span style="color:#ff7850;font-weight:700">${fKz(retiradoP)}</span></div>
+             <div class="row"><span>Salário KB (${Math.round(currentSplit("kambio").salary * 100)}%)</span><span style="color:#50c878;font-weight:700">${fKz(salarioKb)}</span></div>
+            <div class="row"><span>Outras entradas (não-salário)</span><span style="color:#7eb8f7;font-weight:700">${fKz(outrasEntradasP)}</span></div>
+            <div class="row"><span>Total disponível</span><span style="color:#c9a84c;font-weight:700">${fKz(disponivelP)}</span></div>
+            <div class="row"><span>Já sacado (saídas)</span><span style="color:#ff7850;font-weight:700">${fKz(retiradoP)}</span></div>
           </div>
           <div style="display:flex;align-items:center;justify-content:center">
-            ${excedente > 0 ? `
+            ${saldoP < 0 ? `
             <div style="text-align:center">
-              <div style="font-size:10px;color:#ff5050;letter-spacing:2px">⚠ ACIMA DO SALÁRIO</div>
-              <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#ff5050">${fKz(excedente)}</div>
-              <div style="font-size:10px;color:#666;margin-top:4px">retiraste a mais do que o alocado</div>
+              <div style="font-size:10px;color:#ff5050;letter-spacing:2px">⚠ ACIMA DO DISPONÍVEL</div>
+              <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#ff5050">${fKz(Math.abs(saldoP))}</div>
+              <div style="font-size:10px;color:#666;margin-top:4px">sacaste a mais do que o disponível</div>
             </div>`: `
             <div style="text-align:center">
-              <div style="font-size:10px;color:#50c878;letter-spacing:2px">✓ DENTRO DO ORÇAMENTO</div>
-              <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#50c878">${fKz(Math.abs(excedente))}</div>
-              <div style="font-size:10px;color:#666;margin-top:4px">ainda disponível para retirar</div>
+              <div style="font-size:10px;color:#50c878;letter-spacing:2px">✓ DISPONÍVEL PARA SACAR</div>
+              <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#50c878">${fKz(saldoP)}</div>
+              <div style="font-size:10px;color:#666;margin-top:4px">saldo de salário por retirar</div>
             </div>`}
           </div>
         </div>
@@ -982,6 +1004,34 @@
     // ── CUSTÓDIA ───────────────────────────────────────────────────────
     function custodyWithdrawn(item) { return (item.withdrawals || []).reduce((s, w) => s + Number(w.amount || 0), 0); }
     function custodyRemaining(item) { return Number(item.amount || 0) - custodyWithdrawn(item); }
+    function custodyOriginLabel(item) {
+      if (item.sourceType === "account") return db.accounts.find(a => String(a.id) === String(item.sourceId))?.name || item.account || "—";
+      if (item.sourceType === "wallet") { const w = db.wallets.find(x => String(x.id) === String(item.sourceId)); return w ? `${w.name} (${w.asset || "USDT"})` : item.account || "—"; }
+      return item.account || "—";
+    }
+    function custodySourceOptions() {
+      const accountOptions = db.accounts.map(a => `<option value="account:${a.id}" ${a.type === "pessoal" ? "data-pessoal=\"1\"" : ""}>Conta Kz — ${a.name} (${fKz(a.balance)})</option>`).join("");
+      const walletOptions = db.wallets.map(w => `<option value="wallet:${w.id}">Carteira — ${w.name} (${w.asset || "USDT"})</option>`).join("");
+      return `<optgroup label="Contas em Kz">${accountOptions}</optgroup><optgroup label="Carteiras cripto">${walletOptions}</optgroup>`;
+    }
+    function custodySourceReductions(sourceType, sourceId, amount) {
+      const updates = [];
+      if (sourceType === "account") {
+        const account = db.accounts.find(a => String(a.id) === String(sourceId));
+        if (account) updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) - amount } });
+      } else if (sourceType === "wallet") {
+        let remaining = amount;
+        const lots = db.lots.filter(l => String(l.walletId) === String(sourceId) && Number(l.remaining || 0) > 0).sort((a, b) => new Date(a.date) - new Date(b.date));
+        for (const lot of lots) {
+          if (remaining <= 0) break;
+          const deduct = Math.min(Number(lot.remaining || 0), remaining);
+          updates.push({ col: "lots", item: { ...lot, remaining: Number(lot.remaining) - deduct } });
+          remaining -= deduct;
+        }
+        if (remaining > 0.0000001) return null;
+      }
+      return updates;
+    }
 
     function pageCustodia() {
       const active = db.hub_custody.filter(x => !x.returned); const returned = db.hub_custody.filter(x => x.returned);
@@ -1046,11 +1096,13 @@
       ${modal === "custody-withdraw" ? (() => {
           const item = db.hub_custody.find(x => String(x.id) === String(modalState?.editId));
           if (!item) return "";
+          const defaultOrigin = item.sourceType ? `${item.sourceType}:${item.sourceId}` : "";
           return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
           <div class="modal-title">LEVANTAMENTO — ${item.person}</div>
-          <div style="font-size:12px;color:#888;margin-bottom:16px">Restante em custódia: <span style="color:#c9a84c;font-weight:700">${fKz(custodyRemaining(item))}</span></div>
+          <div style="font-size:12px;color:#888;margin-bottom:16px">Restante em custódia: <span style="color:#c9a84c;font-weight:700">${fKz(custodyRemaining(item))}</span> · Origem guardada: ${custodyOriginLabel(item)}</div>
           <div class="field" style="margin-bottom:12px"><label>Data do Levantamento</label><input type="date" id="cw-date" value="${today()}"/></div>
-          <div class="field" style="margin-bottom:20px"><label>Valor Levantado (Kz)</label><input type="number" id="cw-amount" placeholder="ex: 20000"/></div>
+          <div class="field" style="margin-bottom:12px"><label>Valor Levantado (${item.asset || "Kz"})</label><input type="number" id="cw-amount" placeholder="ex: 20000" step="0.0001"/></div>
+          <div class="field" style="margin-bottom:20px"><label>Origem da devolução</label><select id="cw-source">${defaultOrigin ? "" : '<option value="">— Seleccionar origem —</option>'}${custodySourceOptions().replace(`value="${defaultOrigin}"`, `value="${defaultOrigin}" selected`)}</select></div>
           <div style="display:flex;gap:12px">
             <button class="btn-p" style="flex:1" onclick="saveCustodyWithdrawal('${item.id}')">GUARDAR</button>
             <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
@@ -1060,14 +1112,21 @@
 
       ${modal === "custody" ? modalForm("REGISTAR CUSTÓDIA", "custody", [
           { id: "person", label: "Nome da Pessoa", type: "text", placeholder: "ex: Tio Manuel" },
-          { id: "amount", label: "Valor (Kz)", type: "number", placeholder: "ex: 200000" },
+          { id: "source", label: "Onde ficou guardado", type: "select", opts: [] },
+          { id: "amount", label: "Valor", type: "number", placeholder: "ex: 200000" },
           { id: "date", label: "Data de Entrada", type: "date", val: today() },
-          { id: "account", label: "Conta onde ficou guardado", type: "select", opts: ["BFA", "BAI", "Multicaixa Express", "PayPay", "Dinheiro em mão"] },
           { id: "notes", label: "Notas", type: "text", placeholder: "ex: Vai pedir daqui a 2 semanas" },
         ], async () => {
-          const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), account = gv("account"), notes = gv("notes");
+          const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), notes = gv("notes");
+          const source = gv("source");
           if (!person || !amount) return alert("Nome e valor obrigatórios.");
-          await saveDoc("hub_custody", { id: uid(), person, amount, date, account, notes, returned: false, usedInBusiness: false });
+          if (!source) return alert("Escolhe a origem onde o dinheiro ficou guardado.");
+          const [sourceType, sourceId] = source.split(":");
+          const isWallet = sourceType === "wallet";
+          const wallet = isWallet ? db.wallets.find(w => String(w.id) === String(sourceId)) : null;
+          const account = !isWallet ? db.accounts.find(a => String(a.id) === String(sourceId)) : null;
+          const label = isWallet ? `${wallet?.name} (${wallet?.asset || "USDT"})` : account?.name || "—";
+          await saveDoc("hub_custody", { id: uid(), person, amount, date, account: label, sourceType, sourceId, asset: isWallet ? (wallet?.asset || "USDT") : "Kz", notes, returned: false, usedInBusiness: false });
           modal = null; render();
         }) : ""}`;
     }
@@ -1352,42 +1411,49 @@
       const loans = [...db.hub_loans].sort((a, b) => new Date(b.date) - new Date(a.date)); const active = loans.filter(l => !l.returned);
       const returned = loans.filter(l => l.returned);
       const pendingSales = db.sales.filter(s => s.pendingPayment && !s.pendingPaid).sort((a, b) => new Date(b.date) - new Date(a.date));
-      const totalActive = active.reduce((s, l) => s + Number(l.amount || 0), 0) + pendingSales.reduce((s, x) => s + pendingSaleAmount(x), 0);
+      const totalLoaned = active.reduce((s, l) => s + Number(l.amount || 0), 0);
+      const totalPending = pendingSales.reduce((s, x) => s + pendingSaleAmount(x), 0);
       const now = new Date();
       const overdue = active.filter(l => l.dueDate && new Date(l.dueDate) < now);
 
       return `
       <div class="grid4" style="margin-bottom:20px">
-        ${sc("Emprestado + Pendente", fKz(totalActive), "#ff7850", "💵")}
+        ${sc("Emprestado (a receber)", fKz(totalLoaned), "#ff7850", "💵")}
         ${sc("Nº de Empréstimos", active.length, "#7eb8f7", "◉")}
-        ${sc("Vendas Pendentes", pendingSales.length, pendingSales.length > 0 ? "#ff7850" : "#50c878", "🕒")}
+        ${sc("Pagamentos Pendentes", pendingSales.length, pendingSales.length > 0 ? "#c9a84c" : "#50c878", "🕒")}
         ${sc("Em Atraso", overdue.length, overdue.length > 0 ? "#ff5050" : "#50c878", "⚠")}
+      </div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div class="sec-title" style="margin:0">Pagamentos Pendentes</div>
+        </div>
+        <div style="font-size:11px;color:#666;margin-bottom:12px">Vendas ainda não confirmadas como pagas. Não são dívidas — aguardam confirmação de recebimento.</div>
+        ${pendingSales.length === 0 ? empty("Sem pagamentos pendentes") : `
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Cliente</th><th>Valor</th><th>Data</th><th>Estado</th><th></th></tr></thead>
+          <tbody>${pendingSales.map(s => {
+            const client = db.clients.find(c => String(c.id) === String(s.clientId));
+            return `<tr>
+              <td style="font-weight:700;color:#e8e4d9">${client?.name || "Cliente não identificado"}</td>
+              <td style="color:#c9a84c;font-weight:700">${fKz(pendingSaleAmount(s))}</td>
+              <td style="color:#777">${fDate(s.date)}</td>
+              <td><span class="cat-badge red">POR CONFIRMAR</span></td>
+              <td><button class="btn-ghost" style="padding:4px 9px;font-size:11px;color:#50c878;border-color:#50c87844" onclick="openModal('sale-payment','${s.id}')">💰 Confirmar</button></td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table></div>`}
       </div>
 
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-          <div class="sec-title" style="margin:0">Dinheiro Emprestado & Vendas Pendentes</div>
+          <div class="sec-title" style="margin:0">Dinheiro Emprestado (Dívidas a Receber)</div>
           <button class="btn-p" onclick="openModal('loan')">+ NOVO EMPRÉSTIMO</button>
         </div>
-        ${active.length === 0 && pendingSales.length === 0 ? empty("Sem empréstimos ou vendas pendentes") : `
+        ${active.length === 0 ? empty("Sem empréstimos activos") : `
         <table class="tbl">
           <thead><tr><th>Pessoa</th><th>Total</th><th>Pago</th><th>Restante</th><th>Prazo</th><th>Estado</th><th></th></tr></thead>
           <tbody>
-          ${pendingSales.map(s => {
-        const client = db.clients.find(c => String(c.id) === String(s.clientId));
-        const amount = pendingSaleAmount(s);
-        return `<tr style="border-left:3px solid #ff7850">
-              <td style="font-weight:700;color:#e8e4d9">${client?.name || "Cliente não identificado"} <span class="cat-badge red" style="margin-left:4px">VENDA PENDENTE</span></td>
-              <td style="color:#ff7850">${fKz(amount)}</td>
-              <td style="color:#555">—</td>
-              <td style="font-weight:700;color:#c9a84c">${fKz(amount)}</td>
-              <td style="color:#777">—</td>
-              <td><span class="cat-badge red">POR CONFIRMAR</span></td>
-              <td style="display:flex;gap:4px;flex-wrap:wrap">
-                <button class="btn-ghost" style="padding:4px 9px;font-size:11px;color:#50c878;border-color:#50c87844" onclick="openModal('sale-payment','${s.id}')">💰 Confirmar</button>
-              </td>
-            </tr>`;
-      }).join("")}
           ${active.map(l => {
         const isOverdue = l.dueDate && new Date(l.dueDate) < now;
         const paid = loanPaid(l), remaining = loanRemaining(l);
@@ -1396,7 +1462,8 @@
               <td style="font-weight:700;color:#e8e4d9">${l.person} ${loanAsset !== "Kz" ? `<span class="cat-badge green" style="margin-left:4px">${loanAsset}</span>` : ""}</td>
               <td style="color:#ff7850">${fAsset(l.amount, loanAsset)}</td>
               <td style="color:#50c878">${fAsset(paid, loanAsset)}</td>
-              <td style="font-weight:700;color:${remaining <= 0 ? "#50c878" : "#c9a84c"}">${fAsset(remaining, loanAsset)}</td>              <td style="color:${isOverdue ? "#ff5050" : "#777"}">${l.dueDate ? fDate(l.dueDate) : "—"}</td>
+              <td style="font-weight:700;color:${remaining <= 0 ? "#50c878" : "#c9a84c"}">${fAsset(remaining, loanAsset)}</td>
+              <td style="color:${isOverdue ? "#ff5050" : "#777"}">${l.dueDate ? fDate(l.dueDate) : "—"}</td>
               <td>${isOverdue ? '<span class="cat-badge red">EM ATRASO</span>' : '<span class="cat-badge green">EM DIA</span>'}</td>
               <td style="display:flex;gap:4px;flex-wrap:wrap">
                 <button class="btn-ghost" style="padding:4px 9px;font-size:11px" onclick="openModal('loan','${l.id}')">✎</button>
@@ -1608,9 +1675,17 @@
       modal = null; window._loanAsset = null; render();
     };
     window.markReturned = async function (id) {
-      if (!confirm("Marcar como devolvido?")) return;
       const item = db.hub_custody.find(x => x.id === id);
-      if (item) await saveDoc("hub_custody", { ...item, returned: true });
+      if (!item) return;
+      const remaining = custodyRemaining(item);
+      if (!confirm(`Confirmar devolução total de ${fKz(remaining)} a ${item.person}?`)) return;
+      if (remaining > 0 && item.sourceType) {
+        const reductions = custodySourceReductions(item.sourceType, item.sourceId, remaining);
+        if (!reductions) return alert("Saldo insuficiente na origem para devolver totalmente.");
+        await bulkSave([...reductions, { col: "hub_custody", item: { ...item, returned: true } }]);
+      } else {
+        await saveDoc("hub_custody", { ...item, returned: true });
+      }
     };
 
     window.saveCustodyWithdrawal = async function (id) {
@@ -1620,10 +1695,16 @@
       const item = db.hub_custody.find(x => String(x.id) === String(id));
       if (!item) return;
       if (amount > custodyRemaining(item)) return alert("Valor superior ao que ainda está em custódia.");
-      const withdrawals = [...(item.withdrawals || []), { id: uid(), date, amount }];
+      const sourceValue = document.getElementById("cw-source")?.value || `${item.sourceType || ""}:${item.sourceId || ""}`.replace(/^:/, "");
+      if (!sourceValue || !sourceValue.includes(":")) return alert("Escolhe a origem da devolução.");
+      const [sourceType, sourceId] = sourceValue.split(":");
+      const reductions = custodySourceReductions(sourceType, sourceId, amount);
+      if (!reductions) return alert("Saldo insuficiente na origem selecionada.");
+      if (!confirm(`Confirmar devolução de ${fKz(amount)} a ${item.person}?`)) return;
+      const withdrawals = [...(item.withdrawals || []), { id: uid(), date, amount, sourceType, sourceId }];
       const totalWithdrawn = withdrawals.reduce((s, w) => s + Number(w.amount || 0), 0);
       const autoReturned = totalWithdrawn >= Number(item.amount || 0);
-      await saveDoc("hub_custody", { ...item, withdrawals, returned: autoReturned });
+      await bulkSave([...reductions, { col: "hub_custody", item: { ...item, withdrawals, returned: autoReturned } }]);
       modal = null; render();
     };
 
@@ -1649,6 +1730,10 @@
           ${splitRows.map(([key, label]) => { const split = currentSplit(key); return `<div style="display:grid;grid-template-columns:1.2fr repeat(3,1fr);gap:8px;align-items:center;margin-bottom:8px"><span style="font-size:11px;color:#aaa">${label}</span><input type="number" id="split-${key}-reinvest" min="0" max="100" value="${Math.round(split.reinvest * 100)}" placeholder="Reinvestir"/><input type="number" id="split-${key}-salary" min="0" max="100" value="${Math.round(split.salary * 100)}" placeholder="Retirada"/><input type="number" id="split-${key}-savings" min="0" max="100" value="${Math.round(split.savings * 100)}" placeholder="Reserva"/></div>`; }).join("")}
           <button class="btn-p" onclick="saveBusinessSplits()">GUARDAR DIVISÕES</button>
         </div>
+        ${splitHistory().length ? `<div style="border-top:1px solid #1a1a2e;margin-top:16px;padding-top:12px">
+          <div class="sec-title" style="font-size:11px">Rastreio das divisões</div>
+          ${[...splitHistory()].reverse().slice(0, 12).map(h => `<div style="display:flex;justify-content:space-between;font-size:11px;color:#888;padding:4px 0;border-bottom:1px solid #111"><span>${h.business} — ${Math.round(h.reinvest * 100)}/${Math.round(h.salary * 100)}/${Math.round(h.savings * 100)}</span><span style="color:#555">desde ${fDate(h.effectiveFrom)}</span></div>`).join("")}
+        </div>` : ""}
       </div>`;
     }
 
@@ -1751,8 +1836,15 @@
   </div>`;
     }
 
-    function splitBox(label, amount, accent, business = "global") {
-      const split = currentSplit(business);
+    function periodEndDate(p) {
+      const now = new Date();
+      if (p === "today" || p === "week") return today();
+      if (p === "month") return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+      if (p === "year") return `${now.getFullYear()}-12-31`;
+      return "";
+    }
+    function splitBox(label, amount, accent, business = "global", dateStr = "") {
+      const split = currentSplit(business, dateStr || undefined);
       const reinvest = amount * split.reinvest, salary = amount * split.salary, savings = amount * split.savings;
       return `<div class="card">
     <div class="sec-title">${label}</div>
@@ -1804,6 +1896,7 @@
       window.saveModal_taxi_cost = window.saveModal_taxi_cost || (() => { });
       window.saveModal_custody = window.saveModal_custody || (() => { });
       if (modal === "import") calcImport();
+      if (modal === "custody") { const source = document.getElementById("m-source"); if (source && source.options.length === 0) source.innerHTML = custodySourceOptions(); }
     }
 
     // Bind modal saves dynamically since they're closures in page functions
@@ -1876,9 +1969,16 @@
     };
 
     window.saveModal_custody = async function () {
-      const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), account = gv("account"), notes = gv("notes");
+      const person = gv("person"), amount = parseFloat(gv("amount") || 0), date = gv("date"), notes = gv("notes");
+      const source = gv("source");
       if (!person || !amount) return alert("Nome e valor obrigatórios.");
-      await saveDoc("hub_custody", { id: uid(), person, amount, date, account, notes, returned: false, usedInBusiness: false });
+      if (!source) return alert("Escolhe a origem onde o dinheiro ficou guardado.");
+      const [sourceType, sourceId] = source.split(":");
+      const isWallet = sourceType === "wallet";
+      const wallet = isWallet ? db.wallets.find(w => String(w.id) === String(sourceId)) : null;
+      const account = !isWallet ? db.accounts.find(a => String(a.id) === String(sourceId)) : null;
+      const label = isWallet ? `${wallet?.name || "?"} (${wallet?.asset || "USDT"})` : account?.name || "?";
+      await saveDoc("hub_custody", { id: uid(), person, amount, date, account: label, sourceType, sourceId, asset: isWallet ? (wallet?.asset || "USDT") : "Kz", notes, returned: false, usedInBusiness: false });
       modal = null; render();
     };
 
@@ -1890,13 +1990,24 @@
     window.saveBusinessSplits = async function () {
       const businesses = ["global", "kambio", "taxi", "importacao"];
       const splits = {};
+      const historyEntries = [];
       for (const business of businesses) {
         const values = ["reinvest", "salary", "savings"].map(key => Number(document.getElementById(`split-${business}-${key}`)?.value || 0));
         if (values.some(value => value < 0 || value > 100) || Math.abs(values.reduce((sum, value) => sum + value, 0) - 100) > 0.001) return alert(`A divisão de ${business} deve somar exactamente 100%.`);
-        splits[business] = { reinvest: values[0] / 100, salary: values[1] / 100, savings: values[2] / 100 };
+        const next = { reinvest: values[0] / 100, salary: values[1] / 100, savings: values[2] / 100 };
+        const previous = currentSplit(business);
+        splits[business] = next;
+        if (Math.abs(next.reinvest - previous.reinvest) > 0.000001 || Math.abs(next.salary - previous.salary) > 0.000001 || Math.abs(next.savings - previous.savings) > 0.000001) {
+          historyEntries.push({ business, reinvest: next.reinvest, salary: next.salary, savings: next.savings, effectiveFrom: today(), changedAt: new Date().toISOString() });
+        }
       }
-      await saveDoc("settings", { id: "profit-splits", ...splits, updatedAt: new Date().toISOString() });
-      alert("✅ Divisões por negócio guardadas.");
+      if (!confirm("Confirmar alteração das divisões de lucro? As mudanças valem para o futuro e as operações antigas mantêm a divisão da época.")) return;
+      const existingHistory = db.settings?.find(item => item.id === "profit-split-history")?.history || [];
+      await bulkSave([
+        { col: "settings", item: { id: "profit-splits", ...splits, updatedAt: new Date().toISOString() } },
+        { col: "settings", item: { id: "profit-split-history", history: [...existingHistory, ...historyEntries] } },
+      ]);
+      alert("✅ Divisões por negócio guardadas com histórico.");
     };
 
     initAppAndAuth();
@@ -2394,6 +2505,9 @@
       max-width: 340px;
       border-radius: 2px
     }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .field input, .field select, .field textarea { width: 100%; box-sizing: border-box; }
+    .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   </style>
 </head>
 

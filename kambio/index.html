@@ -45,6 +45,12 @@
     ];
     let app, db_fire, auth, currentUser = null;
     let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_taxi_costs: [], hub_imports: [], hub_loans: [], hub_investments: [], hub_deposits: [], hub_obligations: [], lots: [], sales: [], intermediations: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], hub_notes: [], settings: [], opening_balances: [] };
+    let _busy = 0;
+    function busy(on) {
+      _busy = Math.max(0, _busy + (on ? 1 : -1));
+      const overlay = document.getElementById("busy-overlay");
+      if (overlay) overlay.style.display = _busy > 0 ? "flex" : "none";
+    }
     let unsubscribers = [];
 
     // ── LOCAL FALLBACK (quando Firebase não está configurado) ──────────
@@ -108,7 +114,8 @@
         db[col] = [...(db[col] || []).filter(x => String(x.id) !== id), data];
         localSave(); render(); return id;
       }
-      await setDoc(doc(db_fire, col, id), data);
+      busy(true);
+      try { await setDoc(doc(db_fire, col, id), data); } finally { busy(false); }
       return id;
     }
 
@@ -117,7 +124,8 @@
         db[col] = db[col].filter(x => String(x.id) !== String(id));
         localSave(); render(); return;
       }
-      await deleteDoc(doc(db_fire, col, String(id)));
+      busy(true);
+      try { await deleteDoc(doc(db_fire, col, String(id))); } finally { busy(false); }
     }
 
     async function bulkSave(updates) {
@@ -126,12 +134,15 @@
         for (const u of updates) await saveDoc(u.col, u.item);
         return;
       }
-      const batch = writeBatch(db_fire);
-      updates.forEach(({ col, item }) => {
-        const id = item.id ? String(item.id) : String(Date.now());
-        batch.set(doc(db_fire, col, id), { ...item, id });
-      });
-      await batch.commit();
+      busy(true);
+      try {
+        const batch = writeBatch(db_fire);
+        updates.forEach(({ col, item }) => {
+          const id = item.id ? String(item.id) : String(Date.now());
+          batch.set(doc(db_fire, col, id), { ...item, id });
+        });
+        await batch.commit();
+      } finally { busy(false); }
     }
 
     // ── SEED DEFAULTS ──────────────────────────────────────────────────
@@ -307,6 +318,7 @@
         app.innerHTML = buildLayout();
         attachEvents();
       });
+      if (_busy > 0) { const overlay = document.getElementById("busy-overlay"); if (overlay) overlay.style.display = "flex"; }
     }
 
     function buildLayout() {
@@ -345,7 +357,8 @@
         <div class="body">
           ${buildPage()}
         </div>
-      </div>`;
+      </div>
+      <div id="busy-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(8,8,15,.7);align-items:center;justify-content:center;flex-direction:column;gap:12px"><div style="width:34px;height:34px;border:3px solid #c9a84c33;border-top-color:#c9a84c;border-radius:50%;animation:spin 0.8s linear infinite"></div><div style="color:#c9a84c;font-size:11px;letter-spacing:2px">A GRAVAR...</div></div>`;
     }
 
     function navigate(p) { currentPage = p; closeMenu(); render(); }
@@ -385,30 +398,66 @@
     }
 
     // ── DASHBOARD ──────────────────────────────────────────────────────
-    function monthlyProfitChart() {
+    let profitChartMode = "6m";
+    let profitChartSelected = "";
+    function profitMonths() {
       const now = new Date();
-      const months = Array.from({ length: 6 }, (_, i) => new Date(now.getFullYear(), now.getMonth() - 5 + i, 1));
-      const values = months.map(month => db.sales.filter(s => {
-        const date = new Date(s.date);
-        return date.getMonth() === month.getMonth() && date.getFullYear() === month.getFullYear();
-      }).reduce((sum, sale) => sum + Number(sale.totalProfit || 0), 0));
-      const max = Math.max(...values.map(value => Math.abs(value)), 1);
+      const raw = [];
+      if (profitChartMode === "6m") { for (let i = 5; i >= 0; i--) raw.push({ y: now.getFullYear(), m: now.getMonth() - i }); }
+      else if (profitChartMode === "year") { for (let m = 0; m <= now.getMonth(); m++) raw.push({ y: now.getFullYear(), m }); }
+      else if (profitChartMode === "prevYear") { for (let m = 0; m < 12; m++) raw.push({ y: now.getFullYear() - 1, m }); }
+      else { const years = [...new Set(db.sales.map(s => new Date(s.date).getFullYear()).filter(Number))].sort((a, b) => a - b); for (const y of years) for (let m = 0; m < 12; m++) raw.push({ y, m }); if (!raw.length) raw.push({ y: now.getFullYear(), m: now.getMonth() }); }
+      return raw.map(mo => { const m = ((mo.m % 12) + 12) % 12; return { y: mo.y + Math.floor(mo.m / 12), m }; });
+    }
+    function monthKey(y, m) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+    function profitMonthDetail(y, m) {
+      const sales = db.sales.filter(s => { const d = new Date(s.date); return d.getFullYear() === y && d.getMonth() === m; });
+      const daysInMonth = new Date(y, m + 1, 0).getDate();
+      const byDay = {};
+      sales.forEach(s => { const day = Number(String(s.date).slice(8, 10)); byDay[day] = (byDay[day] || 0) + Number(s.totalRevenue || 0); });
+      let rows = "";
+      for (let d = 1; d <= daysInMonth; d++) rows += `<div class="row"><span>${String(d).padStart(2, "0")}/${String(m + 1).padStart(2, "0")}</span><span style="color:${(byDay[d] || 0) > 0 ? "#50c878" : "#555"}">${fKz(byDay[d] || 0)}</span></div>`;
+      return { total: sales.reduce((s, x) => s + Number(x.totalRevenue || 0), 0), rows };
+    }
+    function profitChartMarkup() {
+      const months = profitMonths();
+      const values = months.map(mo => db.sales.filter(s => { const d = new Date(s.date); return d.getFullYear() === mo.y && d.getMonth() === mo.m; }).reduce((sum, sale) => sum + Number(sale.totalProfit || 0), 0));
+      const max = Math.max(...values.map(v => Math.abs(v)), 1);
+      const bars = months.map((mo, i) => {
+        const value = values[i];
+        const height = Math.max(4, Math.round(Math.abs(value) / max * 105));
+        const color = value >= 0 ? "#50c878" : "#ff5050";
+        const key = monthKey(mo.y, mo.m);
+        const selected = profitChartSelected === key;
+        return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:end;height:100%;gap:5px;cursor:pointer" onclick="openProfitMonth('${key}')">
+          <span style="font-size:9px;color:${color};white-space:nowrap">${fKz(value)}</span>
+          <div style="width:100%;max-width:42px;height:${height}px;background:${color};opacity:${selected ? "1" : ".7"};border-radius:2px 2px 0 0;${selected ? "box-shadow:0 0 0 2px #c9a84c" : ""}"></div>
+          <span style="font-size:9px;color:${selected ? "#c9a84c" : "#666"}">${new Date(mo.y, mo.m, 1).toLocaleDateString("pt-AO", { month: "short" }).replace(".", "")}${profitChartMode === "all" ? " " + mo.y : ""}</span>
+        </div>`;
+      }).join("");
+      let detail = "";
+      if (profitChartSelected) {
+        const [y, m] = profitChartSelected.split("-").map(Number);
+        const d = profitMonthDetail(y, m - 1);
+        detail = `<div style="margin-top:16px;border-top:1px solid #1a1a2e;padding-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="sec-title" style="margin:0">Faturação — ${String(m).padStart(2, "0")}/${y}</div><span style="color:#50c878;font-weight:700">${fKz(d.total)}</span></div>
+          <div style="max-height:280px;overflow-y:auto">${d.rows}</div>
+        </div>`;
+      }
+      return `<div style="display:grid;grid-template-columns:repeat(${Math.max(months.length, 1)},1fr);gap:10px;align-items:end;height:150px;margin-top:14px;overflow-x:auto;min-width:${Math.max(months.length * 60, 100)}px">${bars}</div>${detail}`;
+    }
+    function monthlyProfitChart() {
+      const modes = [["6m", "Últimos 6 meses"], ["year", "Este ano"], ["prevYear", "Ano anterior"], ["all", "Todos os meses"]];
       return `<div class="card" style="margin-top:20px">
-        <div class="sec-title">Evolução do Lucro — últimos 6 meses</div>
-        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;align-items:end;height:150px;margin-top:14px">
-          ${months.map((month, i) => {
-            const value = values[i];
-            const height = Math.max(4, Math.round(Math.abs(value) / max * 105));
-            const color = value >= 0 ? "#50c878" : "#ff5050";
-            return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:end;height:100%;gap:5px">
-              <span style="font-size:9px;color:${color};white-space:nowrap">${fKz(value)}</span>
-              <div title="${fKz(value)}" style="width:100%;max-width:42px;height:${height}px;background:${color};opacity:.8;border-radius:2px 2px 0 0"></div>
-              <span style="font-size:9px;color:#666">${month.toLocaleDateString("pt-AO", { month: "short" }).replace(".", "")}</span>
-            </div>`;
-          }).join("")}
+        <div class="sec-title">Evolução do Lucro</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 4px">
+          ${modes.map(([id, label]) => `<button class="${profitChartMode === id ? "btn-primary" : "btn-ghost"}" style="font-size:10px;padding:5px 10px" onclick="setProfitChartMode('${id}')">${label}</button>`).join("")}
         </div>
+        <div id="profit-chart-wrap">${profitChartMarkup()}</div>
       </div>`;
     }
+    window.setProfitChartMode = function (mode) { profitChartMode = mode; profitChartSelected = ""; const wrap = document.getElementById("profit-chart-wrap"); if (wrap) wrap.innerHTML = profitChartMarkup(); };
+    window.openProfitMonth = function (key) { profitChartSelected = profitChartSelected === key ? "" : key; const wrap = document.getElementById("profit-chart-wrap"); if (wrap) wrap.innerHTML = profitChartMarkup(); };
 
     function pageDashboard() {
       const now = new Date();
@@ -1896,6 +1945,7 @@
       const transfer = { id: uid(), date, fromId: String(fromId), toId: String(toId), amount: totalQty, fee, received, asset, notes, createdAt: new Date().toISOString() };
       updates.push({ col: "transfers", item: transfer });
 
+      if (!confirm(`Confirmar transferência de ${totalQty.toFixed(4)} ${asset} de ${fromWallet.name} para ${toWallet.name}?`)) return;
       await bulkSave(updates);
       transferLots = [];
       alert("✅ Transferência registada! O stock foi movido para a carteira de destino.");
@@ -1923,6 +1973,7 @@
       const to = db.accounts.find(a => String(a.id) === String(toId));
       if (!from || !to) return alert("Conta inválida.");
       if (amount > Number(from.balance)) return alert("Saldo insuficiente na conta de origem.");
+      if (!confirm(`Confirmar movimento de ${fKz(amount)} de ${from.name} para ${to.name}?`)) return;
       await bulkSave([
         { col: "accounts", item: { ...from, balance: Number(from.balance) - amount } },
         { col: "accounts", item: { ...to, balance: Number(to.balance) + amount } },
@@ -2278,6 +2329,7 @@
     window.saveProfitSplit = async function () {
       const values = ["reinvest", "salary", "savings"].map(key => Number(document.getElementById(`split-${key}`)?.value || 0));
       if (values.some(value => value < 0 || value > 100) || Math.abs(values.reduce((sum, value) => sum + value, 0) - 100) > 0.001) return alert("A divisão deve ter valores entre 0 e 100 e somar exactamente 100%.");
+      if (!confirm("Confirmar alteração da divisão do lucro? A mudança vale para o futuro e não altera operações antigas.")) return;
       await saveDoc("settings", { id: "profit-split", reinvest: values[0] / 100, salary: values[1] / 100, savings: values[2] / 100, updatedAt: new Date().toISOString() });
       alert("✅ Regra de divisão guardada.");
     };
@@ -2837,6 +2889,9 @@
     .network-node span { color: #777; font-size: 10px; }
     .network-cycle { color: #ff5050; padding: 8px; font-size: 11px; }
     button, input, select, textarea { min-height: 38px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .field input, .field select, .field textarea { width: 100%; box-sizing: border-box; }
+    .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   </style>
 </head>
 
