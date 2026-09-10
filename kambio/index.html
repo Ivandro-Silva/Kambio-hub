@@ -31,8 +31,8 @@
     };
     // ══════════════════════════════════════════════════════════════════
 
-    const COLLECTIONS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_taxi_costs", "hub_imports", "hub_loans", "hub_investments", "hub_deposits", "hub_obligations", "lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
-    const RESET_COLLECTIONS = ["lots", "sales", "intermediations", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
+    const COLLECTIONS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_taxi_costs", "hub_imports", "hub_loans", "hub_investments", "hub_deposits", "hub_obligations", "lots", "sales", "intermediations", "refunds", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
+    const RESET_COLLECTIONS = ["lots", "sales", "intermediations", "refunds", "clients", "affiliates", "suppliers", "accounts", "wallets", "transfers", "notes", "hub_notes", "settings", "opening_balances"];
     const DEFAULT_SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
     const DEFAULT_WALLETS = ["RedotPay", "Binance", "Bybit", "Kast", "Grey"];
     const DEFAULT_ACCOUNTS = [
@@ -44,7 +44,7 @@
       { name: "É-Kwanza", type: "negocio" },
     ];
     let app, db_fire, auth, currentUser = null;
-    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_taxi_costs: [], hub_imports: [], hub_loans: [], hub_investments: [], hub_deposits: [], hub_obligations: [], lots: [], sales: [], intermediations: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], hub_notes: [], settings: [], opening_balances: [] };
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_taxi_costs: [], hub_imports: [], hub_loans: [], hub_investments: [], hub_deposits: [], hub_obligations: [], lots: [], sales: [], intermediations: [], refunds: [], clients: [], affiliates: [], suppliers: [], accounts: [], wallets: [], transfers: [], notes: [], hub_notes: [], settings: [], opening_balances: [] };
     let _busy = 0;
     function busy(on) {
       _busy = Math.max(0, _busy + (on ? 1 : -1));
@@ -411,7 +411,7 @@
     }
     function monthKey(y, m) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
     function profitMonthDetail(y, m) {
-      const sales = db.sales.filter(s => { const d = new Date(s.date); return d.getFullYear() === y && d.getMonth() === m; });
+      const sales = db.sales.filter(s => !s.refunded && (() => { const d = new Date(s.date); return d.getFullYear() === y && d.getMonth() === m; })());
       const daysInMonth = new Date(y, m + 1, 0).getDate();
       const byDay = {};
       sales.forEach(s => { const day = Number(String(s.date).slice(8, 10)); byDay[day] = (byDay[day] || 0) + Number(s.totalRevenue || 0); });
@@ -421,7 +421,7 @@
     }
     function profitChartMarkup() {
       const months = profitMonths();
-      const values = months.map(mo => db.sales.filter(s => { const d = new Date(s.date); return d.getFullYear() === mo.y && d.getMonth() === mo.m; }).reduce((sum, sale) => sum + Number(sale.totalProfit || 0), 0));
+      const values = months.map(mo => db.sales.filter(s => !s.refunded && (() => { const d = new Date(s.date); return d.getFullYear() === mo.y && d.getMonth() === mo.m; })()).reduce((sum, sale) => sum + Number(sale.totalProfit || 0), 0));
       const max = Math.max(...values.map(v => Math.abs(v)), 1);
       const bars = months.map((mo, i) => {
         const value = values[i];
@@ -463,9 +463,9 @@
       const now = new Date();
       const todayStr = today();
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const todayP = db.sales.filter(s => s.date === todayStr).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
-      const monthP = db.sales.filter(s => new Date(s.date) >= monthStart).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
-      const totalP = db.sales.reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const todayP = db.sales.filter(s => !s.refunded && s.date === todayStr).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const monthP = db.sales.filter(s => !s.refunded && new Date(s.date) >= monthStart).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const totalP = db.sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
       const stockByAsset = {}; db.lots.filter(l => Number(l.remaining || 0) > 0).forEach(l => { const a = l.asset || "USDT"; stockByAsset[a] = (stockByAsset[a] || 0) + Number(l.remaining || 0); });
       const stockStr = Object.entries(stockByAsset).map(([a, v]) => fAsset(v, a)).join(" · ") || "0";
       const recent = [...db.sales].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
@@ -501,10 +501,10 @@
       ${recent.length === 0 ? '<div class="empty">SEM VENDAS</div>' : `
       <table class="tbl"><thead><tr><th>Data</th><th>USDT</th><th>Câmbio</th><th>Lucro</th></tr></thead><tbody>
       ${recent.map(s => `<tr>
-        <td>${fDate(s.date)}${s.pendingPayment && !s.pendingPaid ? ' <span style="font-size:9px;color:#ff7850;border:1px solid #ff785044;padding:1px 5px;border-radius:2px">PENDENTE</span>' : ""}</td>
+        <td>${fDate(s.date)}${s.refunded ? ' <span style="font-size:9px;color:#ff7850;border:1px solid #ff785044;padding:1px 5px;border-radius:2px">REEMBOLSADO</span>' : ""}${s.pendingPayment && !s.pendingPaid ? ' <span style="font-size:9px;color:#ff7850;border:1px solid #ff785044;padding:1px 5px;border-radius:2px">PENDENTE</span>' : ""}</td>
         <td style="color:#7eb8f7">${fU(s.totalUsdt)}</td>
         <td style="color:#c9a84c">${Number(s.rateKz).toLocaleString()} Kz</td>
-        <td style="color:${Number(s.totalProfit) >= 0 ? "#50c878" : "#ff5050"};font-weight:700">${fKz(s.totalProfit)}</td>
+        <td style="color:${s.refunded ? "#555" : Number(s.totalProfit) >= 0 ? "#50c878" : "#ff5050"};font-weight:700">${fKz(s.totalProfit)}</td>
       </tr>`).join("")}
       </tbody></table>`}
     </div>
@@ -1213,7 +1213,7 @@
       if (seen.has(id)) return `<li class="network-cycle">⚠ Ciclo detectado em ${client.name}</li>`;
       const nextSeen = new Set(seen).add(id);
       const children = clientChildren(id);
-      const sales = db.sales.filter(sale => String(sale.clientId) === id);
+      const sales = db.sales.filter(sale => !sale.refunded && String(sale.clientId) === id);
       const volume = sales.reduce((sum, sale) => sum + Number(sale.totalUsdt || 0), 0);
       return `<li><div class="network-node" style="margin-left:${Math.min(depth, 6) * 16}px" onclick="openModal('view-client','${client.id}')"><strong>${client.name}</strong><span>${children.length} directos · ${networkDescendants(id)} descendentes · ${fU(volume)}</span></div>${children.length ? `<ul>${children.map(child => networkNode(child, depth + 1, nextSeen)).join("")}</ul>` : ""}</li>`;
     }
@@ -1250,7 +1250,7 @@
       const operations = [];
       db.sales.forEach(sale => {
         const walletIds = [...new Set((sale.lotEntries || []).map(entry => db.lots.find(lot => String(lot.id) === String(entry.lotId))?.walletId).filter(Boolean).map(String))];
-        operations.push({ date: sale.date, type: "Venda", walletIds, wallet: walletIds.map(walletName).join(" / ") || "—", client: clientName(sale.clientId), clientId: sale.clientId || "", asset: sale.asset || "USDT", quantity: sale.totalUsdt, rate: sale.rateKz, value: sale.totalRevenue, result: sale.totalProfit, status: sale.pendingPayment && !sale.pendingPaid ? "Pagamento pendente" : "Concluída" });
+        operations.push({ date: sale.date, type: "Venda", walletIds, wallet: walletIds.map(walletName).join(" / ") || "—", client: clientName(sale.clientId), clientId: sale.clientId || "", asset: sale.asset || "USDT", quantity: sale.totalUsdt, rate: sale.rateKz, value: sale.refunded ? 0 : sale.totalRevenue, result: sale.refunded ? 0 : sale.totalProfit, status: sale.refunded ? "Reembolsada" : (sale.pendingPayment && !sale.pendingPaid ? "Pagamento pendente" : "Concluída") });
       });
       db.lots.forEach(lot => operations.push({ date: lot.date, type: "Compra", walletIds: [String(lot.walletId)], wallet: walletName(lot.walletId), client: "—", clientId: "", asset: lot.asset || "USDT", quantity: lot.usdt, rate: lot.rateKz, value: lot.totalKz, result: null, status: "Registada" }));
       db.transfers.forEach(transfer => operations.push({ date: transfer.date, type: "Transferência", walletIds: [String(transfer.fromId), String(transfer.toId)], wallet: `${walletName(transfer.fromId)} → ${walletName(transfer.toId)}`, client: "—", clientId: "", asset: transfer.asset || "USDT", quantity: transfer.amount, rate: null, value: null, result: null, status: "Registada" }));
@@ -1396,7 +1396,7 @@
       ${filtered.length === 0 ? '<div class="empty">SEM CLIENTES (ou sem resultados para a pesquisa)</div>' : `
       <table class="tbl"><thead><tr><th>#</th><th>Nome</th><th>Telefone</th><th>Grupo</th><th>Adicionado por</th><th>Carteiras</th><th>Compras</th><th>Volume USDT</th><th>Lucro Gerado</th><th></th></tr></thead>
       <tbody>${filtered.map((c, idx) => {
-        const ss = db.sales.filter(s => String(s.clientId) === String(c.id));
+        const ss = db.sales.filter(s => !s.refunded && String(s.clientId) === String(c.id));
         const vol = ss.reduce((a, s) => a + Number(s.totalUsdt || 0), 0);
         const prf = ss.reduce((a, s) => a + Number(s.totalProfit || 0), 0);
         const referrer = db.clients.find(x => String(x.id) === String(c.addedByClientId));
@@ -1433,7 +1433,7 @@
       if (modalState?.type !== "view-client") return "";
       const c = db.clients.find(x => String(x.id) === String(modalState.editId));
       if (!c) return "";
-      const ss = db.sales.filter(s => String(s.clientId) === String(c.id)).sort((a, b) => new Date(b.date) - new Date(a.date));
+      const ss = db.sales.filter(s => !s.refunded && String(s.clientId) === String(c.id)).sort((a, b) => new Date(b.date) - new Date(a.date));
       const vol = ss.reduce((a, s) => a + Number(s.totalUsdt || 0), 0);
       const prf = ss.reduce((a, s) => a + Number(s.totalProfit || 0), 0);
       const prefWallet = db.wallets.find(w => String(w.id) === String(c.preferredWalletId));
@@ -1558,7 +1558,7 @@
         if (rankPeriod === "year") return dt.getFullYear() === now.getFullYear();
         return true;
       };
-      const sales = db.sales.filter(s => s.clientId && filter(s.date));
+      const sales = db.sales.filter(s => !s.refunded && s.clientId && filter(s.date));
       const grp = {};
       sales.forEach(s => { if (!grp[s.clientId]) grp[s.clientId] = { vol: 0, cnt: 0, prf: 0 }; grp[s.clientId].vol += Number(s.totalUsdt || 0); grp[s.clientId].cnt++; grp[s.clientId].prf += Number(s.totalProfit || 0); });
       const ranked = Object.entries(grp).map(([id, st]) => ({ ...st, client: db.clients.find(c => String(c.id) === String(id)) })).filter(r => r.client).sort((a, b) => b.vol - a.vol);
@@ -1597,7 +1597,7 @@
         ${db.affiliates.length === 0 ? '<div class="empty">SEM AFILIADOS</div>' : `
         <table class="tbl"><thead><tr><th>Nome</th><th>Telefone</th><th>Vendas</th><th>Volume USDT</th><th></th></tr></thead>
         <tbody>${db.affiliates.map(a => {
-        const ss = db.sales.filter(s => String(s.affiliateId) === String(a.id));
+        const ss = db.sales.filter(s => !s.refunded && String(s.affiliateId) === String(a.id));
         return `
           <tr>
             <td style="font-weight:700">${a.name}</td>
@@ -2041,6 +2041,7 @@
     function spreadHistoryTable() {
       const groups = {};
       db.sales.forEach(sale => {
+        if (sale.refunded) return;
         const date = new Date(sale.date);
         if (Number.isNaN(date.getTime())) return;
         const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
@@ -2075,9 +2076,9 @@
       };
       const sales = db.sales.filter(s => filter(s.date));
       const lots = db.lots.filter(l => filter(l.date));
-      const rev = sales.reduce((s, x) => s + Number(x.totalRevenue || 0), 0);
+      const rev = sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalRevenue || 0), 0);
       const cost = lots.reduce((s, l) => s + Number(l.totalKz || 0), 0);
-      const profit = sales.reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const profit = sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
 
       return `
       <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
@@ -2087,7 +2088,7 @@
         ${statCard("Receita (Vendas)", fKz(rev), "#7eb8f7", "▲")}
         ${statCard("Custo (Compras)", fKz(cost), "#ff7850", "▼")}
         ${statCard("Lucro Líquido", fKz(profit), profit >= 0 ? "#50c878" : "#ff5050", "◆")}
-        ${statCard("Vendas", sales.length, "#c9a84c", "◈")}
+        ${statCard("Vendas", sales.filter(s => !s.refunded).length, "#c9a84c", "◈")}
       </div>
       <div class="grid2">
         <div class="card">
@@ -2135,6 +2136,7 @@
         if (account) updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) - Number(sale.totalRevenue || 0) } });
       }
       updates.push({ col: "sales", item: { ...sale, refunded: true, refundedAt: new Date().toISOString() } });
+      updates.push({ col: "refunds", item: { id: `refund_${sale.id}`, saleId: String(sale.id), clientId: sale.clientId || null, date: today(), totalUsdt: sale.totalUsdt, totalRevenue: sale.totalRevenue, totalProfit: sale.totalProfit, createdAt: new Date().toISOString() } });
       await bulkSave(updates);
       alert(`✅ Reembolso registado.${skippedLots ? ` Atenção: ${skippedLots} lote(s) já não existiam e não foram restaurados.` : ""}`);
       render();
@@ -2292,7 +2294,7 @@
       return window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
     }
     function spreadsheetCollections(workbook) {
-      const aliases = { clients: ["clients", "clientes"], wallets: ["wallets", "carteiras"], lots: ["lots", "lotes"], sales: ["sales", "vendas"], transfers: ["transfers", "transferencias"], intermediations: ["intermediations", "intermediacao"], accounts: ["accounts", "contas"], suppliers: ["suppliers", "fornecedores"], affiliates: ["affiliates", "afiliados"], notes: ["notes", "notas"], hub_notes: ["hub notes", "comentarios"], hub_income: ["hub income", "entradas"], hub_expenses: ["hub expenses", "saidas"], hub_taxi: ["hub taxi", "taxi"], hub_taxi_costs: ["hub taxi costs"], hub_imports: ["hub imports", "importacao"], hub_custody: ["hub custody", "custodia"], hub_loans: ["hub loans", "emprestimos"],       hub_investments: ["hub investments", "investimentos"], hub_deposits: ["hub deposits", "depositos", "aplicacoes"], hub_obligations: ["hub obligations", "obrigacoes", "dividas"], settings: ["settings", "definicoes"], opening_balances: ["opening balances", "saldos iniciais"] };
+      const aliases = { clients: ["clients", "clientes"], wallets: ["wallets", "carteiras"], lots: ["lots", "lotes"], sales: ["sales", "vendas"], transfers: ["transfers", "transferencias"], intermediations: ["intermediations", "intermediacao"], accounts: ["accounts", "contas"], suppliers: ["suppliers", "fornecedores"], affiliates: ["affiliates", "afiliados"], notes: ["notes", "notas"], hub_notes: ["hub notes", "comentarios"], hub_income: ["hub income", "entradas"], hub_expenses: ["hub expenses", "saidas"], hub_taxi: ["hub taxi", "taxi"], hub_taxi_costs: ["hub taxi costs"], hub_imports: ["hub imports", "importacao"], hub_custody: ["hub custody", "custodia"], hub_loans: ["hub loans", "emprestimos"],       hub_investments: ["hub investments", "investimentos"], hub_deposits: ["hub deposits", "depositos", "aplicacoes"], hub_obligations: ["hub obligations", "obrigacoes", "dividas"], refunds: ["refunds", "reembolsos"], settings: ["settings", "definicoes"], opening_balances: ["opening balances", "saldos iniciais"] };
       const result = {};
       for (const sheetName of workbook.SheetNames) {
         const rows = sheetRows(workbook.Sheets[sheetName]);
@@ -2376,7 +2378,7 @@
     // ══════════════════════════════════════════════════════════════════
     function topClientMonth() {
       const now = new Date();
-      const ms = db.sales.filter(s => { const d = new Date(s.date); return s.clientId && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
+      const ms = db.sales.filter(s => { const d = new Date(s.date); return !s.refunded && s.clientId && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
       const g = {}; ms.forEach(s => { g[s.clientId] = (g[s.clientId] || 0) + Number(s.totalUsdt || 0); });
       const top = Object.entries(g).sort((a, b) => b[1] - a[1])[0];
       if (!top) return null;

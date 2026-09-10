@@ -388,7 +388,7 @@
       const custodiaAtiva = custodia - custodiaDevolvido;
 
       const RP = [{ id: "today", label: "HOJE" }, { id: "week", label: "SEMANA" }, { id: "month", label: "MÊS" }, { id: "year", label: "ANO" }, { id: "all", label: "TUDO" }];
-       const kambioProfitP = db.sales.filter(s => (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, resumoPeriod)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+       const kambioProfitP = db.sales.filter(s => !s.refunded && (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, resumoPeriod)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
       const taxiInP = db.hub_taxi.filter(x => inPeriod(x.date, resumoPeriod)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiCostP = db.hub_taxi_costs.filter(x => inPeriod(x.date, resumoPeriod)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiLiquidP = taxiInP - taxiCostP;
@@ -470,7 +470,7 @@
       const bankBalance = db.accounts.filter(a => a.type === "pessoal" && a.name !== "Dinheiro em Mãos").reduce((s, a) => s + Number(a.balance || 0), 0);
 
       // Salário disponível = salário KB + outras entradas − saídas (corrige saldo negativo incorreto)
-       const kambioProfitP = db.sales.filter(s => (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+       const kambioProfitP = db.sales.filter(s => !s.refunded && (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
        const salarioKb = kambioProfitP * currentSplit("kambio", periodEndDate(period) || undefined).salary;
        const outrasEntradasP = incomeP.filter(x => x.category !== "Salário").reduce((s, x) => s + Number(x.amount || 0), 0);
        const disponivelP = salarioKb + outrasEntradasP;
@@ -1361,13 +1361,13 @@
     function pageInsights() {
       const now = new Date();
       const period = "month";
-      const kambioProfit = db.sales.filter(s => (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const kambioProfit = db.sales.filter(s => !s.refunded && (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
       const taxiIn = db.hub_taxi.filter(x => inPeriod(x.date, period)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiCost = db.hub_taxi_costs.filter(x => !isTaxiInvestment(x) && inPeriod(x.date, period)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiProfit = taxiIn - taxiCost;
       const importProfit = db.hub_imports.filter(i => i.status === "vendido" && inPeriod(i.orderDate, period)).reduce((s, i) => s + Number(i.profitKz || 0), 0);
 
-      const pendingSales = db.sales.filter(s => s.pendingPayment && !s.pendingPaid);
+      const pendingSales = db.sales.filter(s => !s.refunded && s.pendingPayment && !s.pendingPaid);
       const overdueLoans = db.hub_loans.filter(l => !l.returned && l.dueDate && new Date(l.dueDate) < now);
       const overdueObligations = (db.hub_obligations || []).filter(x => (!x.status || x.status === "Em dívida") && x.dueDate && new Date(x.dueDate) < now);
       const maturingDeposits = (db.hub_deposits || []).filter(x => (!x.status || x.status === "Em aplicação") && x.maturityDate && Math.round((new Date(x.maturityDate) - now) / 86400000) <= 15);
@@ -1416,7 +1416,7 @@
     function pageEmprestimos() {
       const loans = [...db.hub_loans].sort((a, b) => new Date(b.date) - new Date(a.date)); const active = loans.filter(l => !l.returned);
       const returned = loans.filter(l => l.returned);
-      const pendingSales = db.sales.filter(s => s.pendingPayment && !s.pendingPaid).sort((a, b) => new Date(b.date) - new Date(a.date));
+      const pendingSales = db.sales.filter(s => !s.refunded && s.pendingPayment && !s.pendingPaid).sort((a, b) => new Date(b.date) - new Date(a.date));
       const totalLoaned = active.reduce((s, l) => s + Number(l.amount || 0), 0);
       const totalPending = pendingSales.reduce((s, x) => s + pendingSaleAmount(x), 0);
       const now = new Date();
@@ -1616,6 +1616,7 @@
       if (!accountId) return alert("Escolhe a conta que recebeu o pagamento.");
       const sale = db.sales.find(s => String(s.id) === String(saleId));
       if (!sale) return;
+      if (sale.refunded) return alert("Esta venda foi reembolsada e não pode ser confirmada.");
       const account = db.accounts.find(a => String(a.id) === String(accountId));
       if (!account) return;
       await saveDoc("accounts", { ...account, balance: Number(account.balance) + pendingSaleAmount(sale) });
