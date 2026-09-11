@@ -414,10 +414,10 @@
       const sales = db.sales.filter(s => !s.refunded && (() => { const d = new Date(s.date); return d.getFullYear() === y && d.getMonth() === m; })());
       const daysInMonth = new Date(y, m + 1, 0).getDate();
       const byDay = {};
-      sales.forEach(s => { const day = Number(String(s.date).slice(8, 10)); byDay[day] = (byDay[day] || 0) + Number(s.totalRevenue || 0); });
+      sales.forEach(s => { const day = Number(String(s.date).slice(8, 10)); byDay[day] = (byDay[day] || 0) + Number(s.totalProfit || 0); });
       let rows = "";
-      for (let d = 1; d <= daysInMonth; d++) rows += `<div class="row"><span>${String(d).padStart(2, "0")}/${String(m + 1).padStart(2, "0")}</span><span style="color:${(byDay[d] || 0) > 0 ? "#50c878" : "#555"}">${fKz(byDay[d] || 0)}</span></div>`;
-      return { total: sales.reduce((s, x) => s + Number(x.totalRevenue || 0), 0), rows };
+      for (let d = 1; d <= daysInMonth; d++) rows += `<div class="row"><span>${String(d).padStart(2, "0")}/${String(m + 1).padStart(2, "0")}</span><span style="color:${(byDay[d] || 0) > 0 ? "#50c878" : (byDay[d] || 0) < 0 ? "#ff5050" : "#555"}">${fKz(byDay[d] || 0)}</span></div>`;
+      return { total: sales.reduce((s, x) => s + Number(x.totalProfit || 0), 0), rows };
     }
     function profitChartMarkup() {
       const months = profitMonths();
@@ -440,7 +440,7 @@
         const [y, m] = profitChartSelected.split("-").map(Number);
         const d = profitMonthDetail(y, m - 1);
         detail = `<div style="margin-top:16px;border-top:1px solid #1a1a2e;padding-top:12px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="sec-title" style="margin:0">Faturação — ${String(m).padStart(2, "0")}/${y}</div><span style="color:#50c878;font-weight:700">${fKz(d.total)}</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="sec-title" style="margin:0">Lucro — ${String(m).padStart(2, "0")}/${y}</div><span style="color:#50c878;font-weight:700">${fKz(d.total)}</span></div>
           <div style="max-height:280px;overflow-y:auto">${d.rows}</div>
         </div>`;
       }
@@ -1392,8 +1392,11 @@
         const hay = [c.name, c.phone, digits(c.phone), c.groupName, c.addedBy, ...(c.walletIds || [])].join(" ").toLowerCase();
         return hay.includes(q) || (qDigits && digits(c.phone).includes(qDigits));
       }).sort((a, b) => Number(a.id) - Number(b.id));
-      return `<div class="card" style="overflow-x:auto">
-      ${filtered.length === 0 ? '<div class="empty">SEM CLIENTES (ou sem resultados para a pesquisa)</div>' : `
+
+      const emptyState = filtered.length === 0 ? '<div class="empty">SEM CLIENTES (ou sem resultados para a pesquisa)</div>' : "";
+
+      const desktop = `<div class="card clients-desktop" style="overflow-x:auto">
+      ${emptyState || `
       <table class="tbl"><thead><tr><th>#</th><th>Nome</th><th>Telefone</th><th>Grupo</th><th>Adicionado por</th><th>Carteiras</th><th>Compras</th><th>Volume USDT</th><th>Lucro Gerado</th><th></th></tr></thead>
       <tbody>${filtered.map((c, idx) => {
         const ss = db.sales.filter(s => !s.refunded && String(s.clientId) === String(c.id));
@@ -1417,6 +1420,19 @@
         </tr>`;
       }).join("")}</tbody></table>`}
       </div>`;
+
+      const mobile = `<div class="card clients-mobile" style="overflow-x:auto">
+      ${emptyState || `
+      <table class="tbl clients-tbl"><thead><tr><th>#</th><th>Nome</th><th>Telefone</th><th>Grupo</th></tr></thead>
+      <tbody>${filtered.map((c, idx) => `<tr>
+          <td style="color:#555">${idx + 1}</td>
+          <td style="font-weight:700;color:#e8e4d9;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" onclick="openModal('view-client','${c.id}')">${c.name}${c.thirdPartyAccount ? ' <span class="cat-badge red" style="font-size:8px">⚠</span>' : ""}</td>
+          <td style="color:#777">${c.phone || "—"}</td>
+          <td style="color:#7eb8f7">${c.groupName || "—"}</td>
+        </tr>`).join("")}</tbody></table>`}
+      </div>`;
+
+      return desktop + mobile;
     }
 
     window.searchClients = function (v) {
@@ -1457,6 +1473,7 @@
         ${c.notes ? `<div style="margin-top:10px"><div style="font-size:10px;color:#555;letter-spacing:1.5px;margin-bottom:6px;text-transform:uppercase">Notas</div><div style="font-size:12px;color:#aaa">${c.notes}</div></div>` : ""}
         <div style="display:flex;gap:12px;margin-top:20px">
           <button class="btn-primary" style="flex:1" onclick="openModal('new-client','${c.id}')">✎ EDITAR</button>
+          <button class="btn-danger mobile-only" onclick="delClient('${c.id}')">🗑 ELIMINAR</button>
           <button class="btn-ghost" onclick="closeModal()">FECHAR</button>
         </div>
       </div></div>`;
@@ -2940,7 +2957,14 @@
       .network-node { flex-direction: column; gap: 5px; }
       .tbl { min-width: 760px; }
       .card { max-width: 100%; }
+      .clients-desktop { display: none; }
+      .clients-mobile { display: block; }
+      .clients-mobile .tbl { min-width: 0; }
+      .mobile-only { display: inline-flex; }
     }
+
+    .clients-mobile { display: none; }
+    .mobile-only { display: none; }
 
     .login-wrap {
       min-height: 100vh;
