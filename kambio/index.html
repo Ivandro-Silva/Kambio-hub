@@ -2952,6 +2952,9 @@
       }
     }
 
+    .clients-mobile { display: none; }
+    .mobile-only { display: none; }
+
     @media(max-width:640px) {
       .modal { width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow-y: auto; padding: 18px; }
       .network-node { flex-direction: column; gap: 5px; }
@@ -2962,9 +2965,6 @@
       .clients-mobile .tbl { min-width: 0; }
       .mobile-only { display: inline-flex; }
     }
-
-    .clients-mobile { display: none; }
-    .mobile-only { display: none; }
 
     .login-wrap {
       min-height: 100vh;
