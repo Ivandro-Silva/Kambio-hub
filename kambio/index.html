@@ -781,7 +781,7 @@
             <div class="field"><label>Cliente</label>
               <input id="s-client" list="sell-client-options" placeholder="Pesquisar por nome, telefone ou grupo..." value="${db.clients.find(c => String(c.id) === String(clientVal))?.name || sellClientSearch}" oninput="selectSellClient(this.value)"/>
               <input type="hidden" id="s-client-id" value="${clientVal}"/>
-              <datalist id="sell-client-options">${db.clients.map(c => `<option value="${c.name}">${c.phone || ""}${c.groupName ? ` · ${c.groupName}` : ""}</option>`).join("")}</datalist>
+              <datalist id="sell-client-options">${db.clients.map(c => `<option value="${c.name}">${c.phone || ""}${c.groupName ? ` · ${c.groupName}` : ""}${c.kzAccount?.iban ? ` · IBAN ${c.kzAccount.iban}` : ""}${c.kzAccount?.holder ? ` · ${c.kzAccount.holder}` : ""}</option>`).join("")}</datalist>
             </div>
             <div class="field"><label>Afiliado</label>
               <select id="s-aff" onchange="clearSellClient()">
@@ -832,7 +832,7 @@
         </div>
 
         <div id="sell-summary-wrap">${buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown)}</div>
-      </div>`;
+      </div>${buildSellConfirmModal()}`;
     }
 
     function buildSellSummary(rate, totalUsdt, totalRevenue, totalProfit, breakdown) {
@@ -957,7 +957,7 @@
     window.selectSellClient = function (value) {
       sellClientSearch = value;
       const normalized = String(value || "").trim().toLocaleLowerCase("pt");
-      const client = db.clients.find(item => [item.name, item.phone, item.groupName].some(field => String(field || "").trim().toLocaleLowerCase("pt") === normalized));
+      const client = db.clients.find(item => [item.name, item.phone, item.groupName, item.kzAccount?.iban, item.kzAccount?.holder].some(field => String(field || "").trim().toLocaleLowerCase("pt") === normalized));
       sellClientId = client ? String(client.id) : "";
       const hidden = document.getElementById("s-client-id");
       if (hidden) hidden.value = sellClientId;
@@ -1052,10 +1052,50 @@
         updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance) + totalRevenue } });
       }
 
+      const client = db.clients.find(c => String(c.id) === String(clientId));
+      const account = db.accounts.find(a => String(a.id) === String(accountId));
+      window._pendingSell = {
+        sale, updates,
+        summary: {
+          clientName: client?.name || "—",
+          clientWallet: (client?.walletIds || []).join(", ") || "—",
+          accountName: account?.name || "—",
+          totalUsdt, totalRevenue, rateKz,
+        },
+      };
+      modalState = { type: "sell-confirm" };
+      render();
+    };
+
+    function buildSellConfirmModal() {
+      if (modalState?.type !== "sell-confirm" || !window._pendingSell) return "";
+      const { summary } = window._pendingSell;
+      return `<div class="overlay" onclick="cancelSell()"><div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-title">CONFIRMAR VENDA</div>
+        <div class="row"><span>Cliente</span><span style="color:#e8e4d9">${summary.clientName}</span></div>
+        <div class="row"><span>Carteira cripto (ID do cliente)</span><span style="color:#7eb8f7;word-break:break-all">${summary.clientWallet}</span></div>
+        <div class="row"><span>Conta de recebimento (Kz)</span><span style="color:#c9a84c">${summary.accountName}</span></div>
+        <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+          <div class="row"><span>Total ${sellAsset}</span><span style="color:#7eb8f7">${fU(summary.totalUsdt)}</span></div>
+          <div class="row"><span>Câmbio</span><span>${Number(summary.rateKz).toLocaleString()} Kz</span></div>
+          <div class="row bold"><span>Valor a ser pago</span><span style="color:#50c878;font-size:15px">${fKz(summary.totalRevenue)}</span></div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:20px">
+          <button class="btn-primary" style="flex:1" onclick="confirmSell()">CONFIRMAR</button>
+          <button class="btn-ghost" onclick="cancelSell()">CANCELAR</button>
+        </div>
+      </div></div>`;
+    }
+    window.cancelSell = function () { window._pendingSell = null; modalState = null; render(); };
+    window.confirmSell = async function () {
+      const pending = window._pendingSell;
+      if (!pending) return;
       const button = document.getElementById("submit-sell");
       setSubmitLoading(button, true, "A GUARDAR VENDA...");
       try {
-        await bulkSave(updates);
+        await bulkSave(pending.updates);
+        window._pendingSell = null;
+        modalState = null;
         sellSelections = {};
         sellWalletId = "";
         sellAsset = "USDT";
@@ -1389,7 +1429,7 @@
       const qDigits = digits(clientSearch);
       const filtered = db.clients.filter(c => {
         if (!q) return true;
-        const hay = [c.name, c.phone, digits(c.phone), c.groupName, c.addedBy, ...(c.walletIds || [])].join(" ").toLowerCase();
+        const hay = [c.name, c.phone, digits(c.phone), c.groupName, c.addedBy, c.kzAccount?.iban, c.kzAccount?.holder, ...(c.walletIds || [])].join(" ").toLowerCase();
         return hay.includes(q) || (qDigits && digits(c.phone).includes(qDigits));
       }).sort((a, b) => Number(a.id) - Number(b.id));
 
@@ -2096,8 +2136,26 @@
       const rev = sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalRevenue || 0), 0);
       const cost = lots.reduce((s, l) => s + Number(l.totalKz || 0), 0);
       const profit = sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const pendingSales = db.sales.filter(s => !s.refunded && s.pendingPayment && !s.pendingPaid).sort((a, b) => new Date(b.date) - new Date(a.date));
 
       return `
+      ${pendingSales.length ? `<div class="card" style="margin-bottom:20px;border-color:#ff785066">
+        <div class="sec-title">Pagamentos Pendentes</div>
+        <div style="font-size:11px;color:#666;margin-bottom:12px">Vendas ainda não confirmadas como pagas. Confirma aqui o recebimento para creditar a conta Kz.</div>
+        <div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Cliente</th><th>Valor</th><th>Data</th><th>Estado</th><th></th></tr></thead>
+          <tbody>${pendingSales.map(s => {
+            const client = db.clients.find(c => String(c.id) === String(s.clientId));
+            return `<tr>
+              <td style="font-weight:700;color:#e8e4d9">${client?.name || "Cliente não identificado"}</td>
+              <td style="color:#c9a84c;font-weight:700">${fKz(s.totalRevenue)}</td>
+              <td style="color:#777">${fDate(s.date)}</td>
+              <td><span class="cat-badge red">POR CONFIRMAR</span></td>
+              <td><button class="btn-ghost" style="padding:4px 9px;font-size:11px;color:#50c878;border-color:#50c87844" onclick="openModal('sale-payment','${s.id}')">💰 Confirmar</button></td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table></div>
+      </div>` : ""}
       <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
         ${PERIODS.map(p => `<button class="${finPeriod === p.id ? "btn-primary" : "btn-ghost"}" style="font-size:11px;padding:7px 14px" onclick="setFinPeriod('${p.id}')">${p.label}</button>`).join("")}
       </div>
@@ -2133,9 +2191,44 @@
             </tr>`).join("")}</tbody>
           </table></div>`}
         </div>
-      </div>${monthlyProfitChart()}${spreadHistoryTable()}`;
+      </div>${monthlyProfitChart()}${spreadHistoryTable()}${buildSalePaymentModal()}`;
     }
     window.setFinPeriod = function (p) { finPeriod = p; render(); };
+    function buildSalePaymentModal() {
+      if (modalState?.type !== "sale-payment") return "";
+      const sale = db.sales.find(s => String(s.id) === String(modalState.editId));
+      if (!sale) return "";
+      const client = db.clients.find(c => String(c.id) === String(sale.clientId));
+      return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-title">CONFIRMAR PAGAMENTO — ${client?.name || "Cliente"}</div>
+        <div style="font-size:12px;color:#888;margin-bottom:16px">Valor da venda: <span style="color:#c9a84c;font-weight:700">${fKz(sale.totalRevenue)}</span></div>
+        <div class="field" style="margin-bottom:12px"><label>Data do Recebimento</label><input type="date" id="sp-date" value="${today()}"/></div>
+        <div class="field" style="margin-bottom:20px"><label>Conta que Recebeu</label>
+          <select id="sp-account">
+            <option value="">— Seleccionar —</option>
+            ${db.accounts.map(a => `<option value="${a.id}" ${String(sale.accountId) === String(a.id) ? "selected" : ""}>${a.name} (${fKz(a.balance)})</option>`).join("")}
+          </select>
+        </div>
+        <div style="display:flex;gap:12px">
+          <button class="btn-primary" style="flex:1" onclick="saveSalePayment('${sale.id}')">CONFIRMAR</button>
+          <button class="btn-ghost" onclick="closeModal()">CANCELAR</button>
+        </div>
+      </div></div>`;
+    }
+    window.saveSalePayment = async function (saleId) {
+      const accountId = document.getElementById("sp-account")?.value;
+      if (!accountId) return alert("Escolhe a conta que recebeu o pagamento.");
+      const sale = db.sales.find(s => String(s.id) === String(saleId));
+      if (!sale) return;
+      if (sale.refunded) return alert("Esta venda foi reembolsada e não pode ser confirmada.");
+      const account = db.accounts.find(a => String(a.id) === String(accountId));
+      if (!account) return alert("Conta inválida.");
+      await bulkSave([
+        { col: "accounts", item: { ...account, balance: Number(account.balance) + Number(sale.totalRevenue || 0) } },
+        { col: "sales", item: { ...sale, pendingPaid: true, accountId: String(accountId) } },
+      ]);
+      modalState = null; render();
+    };
     window.refundSale = async function (id) {
       const sale = db.sales.find(s => String(s.id) === String(id));
       if (!sale) return alert("Venda não encontrada.");
