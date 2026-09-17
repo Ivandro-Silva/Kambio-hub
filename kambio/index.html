@@ -415,13 +415,18 @@
       const daysInMonth = new Date(y, m + 1, 0).getDate();
       const byDay = {};
       sales.forEach(s => { const day = Number(String(s.date).slice(8, 10)); byDay[day] = (byDay[day] || 0) + Number(s.totalProfit || 0); });
+      (db.intermediations || []).filter(i => i.status !== "cancelado").forEach(i => { const d = new Date(i.date); if (d.getFullYear() === y && d.getMonth() === m) { const day = Number(String(i.date).slice(8, 10)); byDay[day] = (byDay[day] || 0) + Number(i.profit || 0); } });
       let rows = "";
       for (let d = 1; d <= daysInMonth; d++) rows += `<div class="row"><span>${String(d).padStart(2, "0")}/${String(m + 1).padStart(2, "0")}</span><span style="color:${(byDay[d] || 0) > 0 ? "#50c878" : (byDay[d] || 0) < 0 ? "#ff5050" : "#555"}">${fKz(byDay[d] || 0)}</span></div>`;
       return { total: sales.reduce((s, x) => s + Number(x.totalProfit || 0), 0), rows };
     }
     function profitChartMarkup() {
       const months = profitMonths();
-      const values = months.map(mo => db.sales.filter(s => !s.refunded && (() => { const d = new Date(s.date); return d.getFullYear() === mo.y && d.getMonth() === mo.m; })()).reduce((sum, sale) => sum + Number(sale.totalProfit || 0), 0));
+      const values = months.map(mo => {
+        const start = `${mo.y}-${String(mo.m + 1).padStart(2, "0")}-01`;
+        const end = new Date(mo.y, mo.m + 1, 0).toISOString().slice(0, 10);
+        return db.sales.filter(s => !s.refunded && (() => { const d = new Date(s.date); return d.getFullYear() === mo.y && d.getMonth() === mo.m; })()).reduce((sum, sale) => sum + Number(sale.totalProfit || 0), 0) + intermediationProfit(start, end);
+      });
       const max = Math.max(...values.map(v => Math.abs(v)), 1);
       const bars = months.map((mo, i) => {
         const value = values[i];
@@ -463,9 +468,9 @@
       const now = new Date();
       const todayStr = today();
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const todayP = db.sales.filter(s => !s.refunded && s.date === todayStr).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
-      const monthP = db.sales.filter(s => !s.refunded && new Date(s.date) >= monthStart).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
-      const totalP = db.sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const todayP = db.sales.filter(s => !s.refunded && s.date === todayStr).reduce((s, x) => s + Number(x.totalProfit || 0), 0) + intermediationProfit(todayStr, todayStr);
+      const monthP = db.sales.filter(s => !s.refunded && new Date(s.date) >= monthStart).reduce((s, x) => s + Number(x.totalProfit || 0), 0) + intermediationProfit(monthStart.toISOString().slice(0, 10), todayStr);
+      const totalP = db.sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalProfit || 0), 0) + intermediationProfit(null, null);
       const stockByAsset = {}; db.lots.filter(l => Number(l.remaining || 0) > 0).forEach(l => { const a = l.asset || "USDT"; stockByAsset[a] = (stockByAsset[a] || 0) + Number(l.remaining || 0); });
       const stockStr = Object.entries(stockByAsset).map(([a, v]) => fAsset(v, a)).join(" · ") || "0";
       const recent = [...db.sales].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
@@ -1124,11 +1129,18 @@
     function fInterAsset(value, asset) {
       return `${Number(value || 0).toLocaleString("pt-AO", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${asset}`;
     }
+    function intermediationProfit(from, to) {
+      return (db.intermediations || []).filter(i => i.status !== "cancelado").filter(i => {
+        if (from && i.date < from) return false;
+        if (to && i.date > to) return false;
+        return true;
+      }).reduce((s, i) => s + Number(i.profit || 0), 0);
+    }
 
     function pageIntermediation() {
       const operations = [...(db.intermediations || [])].sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
       const pending = operations.filter(item => !["concluido", "cancelado"].includes(item.status));
-      const profit = operations.reduce((sum, item) => sum + Number(item.profit || 0), 0);
+      const profit = operations.filter(item => item.status !== "cancelado").reduce((sum, item) => sum + Number(item.profit || 0), 0);
       return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:10px;flex-wrap:wrap">
         <div><div class="sec-title" style="margin:0">Intermediação de Activos</div><div style="font-size:11px;color:#666;margin-top:5px">Opera EUR, BRL ou outros activos sem os adicionar ao stock das tuas carteiras.</div></div>
         <button class="btn-primary" onclick="openModal('new-intermediation')">+ NOVA INTERMEDIAÇÃO</button>
@@ -1204,7 +1216,7 @@
       const operation = { id: uid(), date: document.getElementById("im-date")?.value || today(), asset, supplier, quantity, buyRate, sellRate, totalCost, totalRevenue, profit: totalRevenue - totalCost, clientId: document.getElementById("im-client")?.value || null, paymentMode, accountId: accountId || null, destination: document.getElementById("im-destination")?.value?.trim(), status: document.getElementById("im-status")?.value || "pendente", notes: document.getElementById("im-notes")?.value || "", revenueReceived: paymentMode === "cliente_antecipado", movementDelta: 0, createdAt: new Date().toISOString() };
       const updates = [{ col: "intermediations", item: operation }];
       if (account) {
-        const delta = paymentMode === "cliente_antecipado" ? totalRevenue : -totalCost;
+        const delta = paymentMode === "cliente_antecipado" ? (totalRevenue - totalCost) : -totalCost;
         operation.movementDelta = delta;
         updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) + delta } });
       }
@@ -2135,7 +2147,8 @@
       const lots = db.lots.filter(l => filter(l.date));
       const rev = sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalRevenue || 0), 0);
       const cost = lots.reduce((s, l) => s + Number(l.totalKz || 0), 0);
-      const profit = sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const interProfit = (db.intermediations || []).filter(i => i.status !== "cancelado" && filter(i.date)).reduce((s, i) => s + Number(i.profit || 0), 0);
+      const profit = sales.filter(s => !s.refunded).reduce((s, x) => s + Number(x.totalProfit || 0), 0) + interProfit;
       const pendingSales = db.sales.filter(s => !s.refunded && s.pendingPayment && !s.pendingPaid).sort((a, b) => new Date(b.date) - new Date(a.date));
 
       return `
@@ -3052,7 +3065,7 @@
       .modal { width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow-y: auto; padding: 18px; }
       .network-node { flex-direction: column; gap: 5px; }
       .tbl { min-width: 760px; }
-      .card { max-width: 100%; }
+      .card { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
       .clients-desktop { display: none; }
       .clients-mobile { display: block; }
       .clients-mobile .tbl { min-width: 0; }

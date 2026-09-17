@@ -25,11 +25,11 @@
     };
 
     // ── COLLECTIONS ────────────────────────────────────────────────────
-    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "hub_investments", "hub_deposits", "hub_obligations", "sales", "lots", "wallets", "accounts", "hub_notes", "clients", "settings"];
+    const COLS = ["hub_income", "hub_expenses", "hub_custody", "hub_taxi", "hub_imports", "hub_taxi_costs", "hub_loans", "hub_investments", "hub_deposits", "hub_obligations", "sales", "intermediations", "lots", "wallets", "accounts", "hub_notes", "clients", "settings"];
     const DEFAULT_SPLIT = { reinvest: 0.6, salary: 0.3, savings: 0.1 };
 
     let app, db_fire, auth, currentUser = null;
-    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], hub_investments: [], hub_deposits: [], hub_obligations: [], sales: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [], settings: [] };
+    let db = { hub_income: [], hub_expenses: [], hub_custody: [], hub_taxi: [], hub_imports: [], hub_taxi_costs: [], hub_loans: [], hub_investments: [], hub_deposits: [], hub_obligations: [], sales: [], intermediations: [], lots: [], wallets: [], accounts: [], hub_notes: [], clients: [], settings: [] };
     let _busy = 0;
     function busy(on) {
       _busy = Math.max(0, _busy + (on ? 1 : -1));
@@ -119,6 +119,9 @@
       return selected ? { ...DEFAULT_SPLIT, ...selected } : DEFAULT_SPLIT;
     }
     function splitHistory() { return db.settings?.find(item => item.id === "profit-split-history")?.history || []; }
+    function interProfitInPeriod(period) {
+      return (db.intermediations || []).filter(i => i.status !== "cancelado" && inPeriod(i.date, period)).reduce((s, i) => s + Number(i.profit || 0), 0);
+    }
 
     const INCOME_CATS = ["Salário", "Serviços Extras", "Importação", "Táxi", "Outro"];
     const EXPENSE_CATS = ["Alimentação", "Transporte", "Telecomunicações", "Lazer", "Vestuário", "Cota Juventude", "Investimento", "Outro"];
@@ -388,7 +391,7 @@
       const custodiaAtiva = custodia - custodiaDevolvido;
 
       const RP = [{ id: "today", label: "HOJE" }, { id: "week", label: "SEMANA" }, { id: "month", label: "MÊS" }, { id: "year", label: "ANO" }, { id: "all", label: "TUDO" }];
-       const kambioProfitP = db.sales.filter(s => !s.refunded && (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, resumoPeriod)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+       const kambioProfitP = db.sales.filter(s => !s.refunded && (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, resumoPeriod)).reduce((s, x) => s + Number(x.totalProfit || 0), 0) + interProfitInPeriod(resumoPeriod);
       const taxiInP = db.hub_taxi.filter(x => inPeriod(x.date, resumoPeriod)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiCostP = db.hub_taxi_costs.filter(x => inPeriod(x.date, resumoPeriod)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiLiquidP = taxiInP - taxiCostP;
@@ -470,7 +473,7 @@
       const bankBalance = db.accounts.filter(a => a.type === "pessoal" && a.name !== "Dinheiro em Mãos").reduce((s, a) => s + Number(a.balance || 0), 0);
 
       // Salário disponível = salário KB + outras entradas − saídas (corrige saldo negativo incorreto)
-       const kambioProfitP = db.sales.filter(s => !s.refunded && (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+       const kambioProfitP = db.sales.filter(s => !s.refunded && (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0) + interProfitInPeriod(period);
        const salarioKb = kambioProfitP * currentSplit("kambio", periodEndDate(period) || undefined).salary;
        const outrasEntradasP = incomeP.filter(x => x.category !== "Salário").reduce((s, x) => s + Number(x.amount || 0), 0);
        const disponivelP = salarioKb + outrasEntradasP;
@@ -1359,7 +1362,7 @@
     function pageInsights() {
       const now = new Date();
       const period = "month";
-      const kambioProfit = db.sales.filter(s => !s.refunded && (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0);
+      const kambioProfit = db.sales.filter(s => !s.refunded && (!s.pendingPayment || s.pendingPaid) && inPeriod(s.date, period)).reduce((s, x) => s + Number(x.totalProfit || 0), 0) + interProfitInPeriod(period);
       const taxiIn = db.hub_taxi.filter(x => inPeriod(x.date, period)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiCost = db.hub_taxi_costs.filter(x => !isTaxiInvestment(x) && inPeriod(x.date, period)).reduce((s, x) => s + Number(x.amount || 0), 0);
       const taxiProfit = taxiIn - taxiCost;
@@ -2449,7 +2452,7 @@
     @media(max-width:640px) {
       .modal { width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow-y: auto; padding: 18px; }
       .tbl { min-width: 700px; }
-      .card { max-width: 100%; }
+      .card { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
     }
 
     .login-wrap {
