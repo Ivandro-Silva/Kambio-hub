@@ -198,12 +198,13 @@
     }
 
     const fKz = v => `${Number(v || 0).toLocaleString("pt-AO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kz`;
-    const fU = v => `${Number(v || 0).toFixed(4)} USDT`;
+    const fU = v => `${Number(v || 0).toLocaleString("pt-AO", { maximumFractionDigits: 4 })} USDT`;
     const FIAT_ASSETS = ["EUR", "USD", "GBP"];
-    const fAsset = (v, asset = "USDT") => `${Number(v || 0).toFixed(FIAT_ASSETS.includes(asset) ? 2 : 4)} ${asset}`;
+    const fAsset = (v, asset = "USDT") => `${FIAT_ASSETS.includes(asset) ? Number(v || 0).toFixed(2) : Number(v || 0).toLocaleString("pt-AO", { maximumFractionDigits: 4 })} ${asset}`;
     const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
+    const r2 = n => Math.round(Number(n || 0) * 100) / 100;
     const r8 = n => Math.round(Number(n) * 1e8) / 1e8;
     function currentSplit(business = "kambio") {
       const configured = db.settings?.find(item => item.id === "profit-splits") || db.settings?.find(item => item.id === "profit-split");
@@ -592,7 +593,7 @@
       }).join("")}</tbody>
           </table></div>`}
         </div>
-       </div>`;
+       </div>${buildBuyConfirmModal()}`;
     }
 
     window.onSupChange = function () {
@@ -698,21 +699,59 @@
       if (Math.abs(totalPaid - totalDue) > 0.5) return alert(`O total distribuído (${fKz(totalPaid)}) não coincide com o total a pagar (${fKz(totalDue)}).`);
       for (const p of payments) if (p.val > Number(p.account.balance)) return alert(`Saldo insuficiente em ${p.account.name}.`);
 
+      const existingLot = findMatchingLot(walletId, asset, rate);
+      const lotItem = existingLot
+        ? { ...existingLot, usdt: r8(Number(existingLot.usdt) + usdt), remaining: r8(Number(existingLot.remaining) + usdt), totalKz: r8(Number(existingLot.totalKz) + usdt * rate) }
+        : { id: uid(), date, supplierName: supName, asset, usdt, rateKz: rate, totalKz: usdt * rate, walletId: String(walletId), remaining: usdt, notes, createdAt: new Date().toISOString() };
+
+      const updates = [{ col: "lots", item: lotItem }];
+      payments.forEach(p => updates.push({ col: "accounts", item: { ...p.account, balance: r2(Number(p.account.balance) - p.val) } }));
+
+      const wallet = db.wallets.find(w => String(w.id) === String(walletId));
+      window._pendingBuy = {
+        date, asset, supId, supName, usdt, rate, walletId, notes, existingLot, updates,
+        summary: {
+          supName, asset, usdt, rate, walletName: wallet?.name || "—",
+          totalDue, paymentLines: payments.map(p => `${p.account.name}: ${fKz(p.val)}`),
+        },
+      };
+      modalState = { type: "buy-confirm" };
+      render();
+    };
+
+    function buildBuyConfirmModal() {
+      if (modalState?.type !== "buy-confirm" || !window._pendingBuy) return "";
+      const { summary } = window._pendingBuy;
+      return `<div class="overlay" onclick="cancelBuy()"><div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-title">CONFIRMAR COMPRA</div>
+        <div class="row"><span>Fornecedor</span><span style="color:#e8e4d9">${summary.supName}</span></div>
+        <div class="row"><span>Activo</span><span style="color:#c084fc">${summary.asset}</span></div>
+        <div class="row"><span>Quantidade</span><span style="color:#7eb8f7">${fAsset(summary.usdt, summary.asset)}</span></div>
+        <div class="row"><span>Câmbio de compra</span><span>${Number(summary.rate).toLocaleString()} Kz</span></div>
+        <div class="row"><span>Carteira de destino</span><span style="color:#7eb8f7">${summary.walletName}</span></div>
+        <div style="border-top:1px solid #1a1a2e;margin-top:8px;padding-top:8px">
+          <div class="row bold"><span>Total a pagar</span><span style="color:#ff7850;font-size:15px">${fKz(summary.totalDue)}</span></div>
+          <div style="font-size:10px;color:#555;letter-spacing:1.5px;margin:8px 0 4px;text-transform:uppercase">Contas de pagamento</div>
+          ${summary.paymentLines.map(l => `<div class="row"><span>${l.split(": ")[0]}</span><span style="color:#ff7850">${l.split(": ")[1]}</span></div>`).join("")}
+        </div>
+        <div style="display:flex;gap:12px;margin-top:20px">
+          <button class="btn-primary" style="flex:1" onclick="confirmBuy()">CONFIRMAR</button>
+          <button class="btn-ghost" onclick="cancelBuy()">CANCELAR</button>
+        </div>
+      </div></div>`;
+    }
+    window.cancelBuy = function () { window._pendingBuy = null; modalState = null; render(); };
+    window.confirmBuy = async function () {
+      const pending = window._pendingBuy;
+      if (!pending) return;
       const button = document.getElementById("submit-buy");
       setSubmitLoading(button, true, "A GUARDAR COMPRA...");
       try {
-        if (supId === "__new" && supName) await saveDoc("suppliers", { id: uid(), name: supName, phone: "" });
-
-        const existingLot = findMatchingLot(walletId, asset, rate);
-        const lotItem = existingLot
-          ? { ...existingLot, usdt: r8(Number(existingLot.usdt) + usdt), remaining: r8(Number(existingLot.remaining) + usdt), totalKz: r8(Number(existingLot.totalKz) + usdt * rate) }
-          : { id: uid(), date, supplierName: supName, asset, usdt, rateKz: rate, totalKz: usdt * rate, walletId: String(walletId), remaining: usdt, notes, createdAt: new Date().toISOString() };
-
-        const updates = [{ col: "lots", item: lotItem }];
-        payments.forEach(p => updates.push({ col: "accounts", item: { ...p.account, balance: Number(p.account.balance) - p.val } }));
-
-        await bulkSave(updates);
-        alert(existingLot ? "✅ Compra registada! Quantidade somada a um lote existente (mesma carteira, ativo e câmbio)." : "✅ Compra registada! Lote criado.");
+        if (pending.supId === "__new" && pending.supName) await saveDoc("suppliers", { id: uid(), name: pending.supName, phone: "" });
+        await bulkSave(pending.updates);
+        window._pendingBuy = null;
+        modalState = null;
+        alert(pending.existingLot ? "✅ Compra registada! Quantidade somada a um lote existente (mesma carteira, ativo e câmbio)." : "✅ Compra registada! Lote criado.");
         setSubmitLoading(button, false);
         navigate("stock");
       } catch (error) {
@@ -803,7 +842,7 @@
             <div class="field"><label>Notas</label><input type="text" id="s-notes" placeholder="Opcional..." value="${notesVal}"/></div>
             <div class="field full" style="flex-direction:row;align-items:center;gap:8px">
               <input type="checkbox" id="s-pending" style="width:auto" ${pendingVal ? "checked" : ""}/>
-              <label style="margin:0;text-transform:none;font-size:12px;color:#ccc">Pagamento Pendente — o stock é descontado agora, mas a conta só é creditada quando confirmares o pagamento no Hub</label>
+              <label style="margin:0;text-transform:none;font-size:12px;color:#ccc">Pagamento Pendente — o stock é descontado agora, mas a conta só é creditada quando confirmares o pagamento no Financeiro</label>
             </div>
             <div class="field full" style="flex-direction:row;align-items:center;gap:8px">
               <input type="checkbox" id="s-all-wallets" style="width:auto" ${sellAllWallets ? "checked" : ""} onchange="onSellAllWalletsChange(this.checked)"/>
@@ -1054,7 +1093,7 @@
       // credit account — só se o pagamento NÃO for pendente
       if (!pending) {
         const account = db.accounts.find(a => String(a.id) === String(accountId));
-        updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance) + totalRevenue } });
+        updates.push({ col: "accounts", item: { ...account, balance: r2(Number(account.balance) + totalRevenue) } });
       }
 
       const client = db.clients.find(c => String(c.id) === String(clientId));
@@ -1218,7 +1257,7 @@
       if (account) {
         const delta = paymentMode === "cliente_antecipado" ? (totalRevenue - totalCost) : -totalCost;
         operation.movementDelta = delta;
-        updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) + delta } });
+        updates.push({ col: "accounts", item: { ...account, balance: r2(Number(account.balance || 0) + delta) } });
       }
       await bulkSave(updates);
       modal = null;
@@ -1232,7 +1271,7 @@
       const account = db.accounts.find(item => String(item.id) === String(operation.accountId));
       if (!account) return alert("Esta operação não tem conta de recebimento associada.");
       if (!confirm(`Registar recebimento de ${fKz(operation.totalRevenue)} em ${account.name}?`)) return;
-      await bulkSave([{ col: "accounts", item: { ...account, balance: Number(account.balance || 0) + Number(operation.totalRevenue || 0) } }, { col: "intermediations", item: { ...operation, revenueReceived: true, movementDelta: Number(operation.movementDelta || 0) + Number(operation.totalRevenue || 0) } }]);
+      await bulkSave([{ col: "accounts", item: { ...account, balance: r2(Number(account.balance || 0) + Number(operation.totalRevenue || 0)) } }, { col: "intermediations", item: { ...operation, revenueReceived: true, movementDelta: r2(Number(operation.movementDelta || 0) + Number(operation.totalRevenue || 0)) } }]);
       render();
     };
 
@@ -1245,7 +1284,7 @@
       if (!operation || !confirm("Eliminar esta intermediação? O movimento de conta será revertido.")) return;
       const account = operation.accountId && db.accounts.find(item => String(item.id) === String(operation.accountId));
       const updates = [{ col: "intermediations", item: { ...operation, deleted: true } }];
-      if (account && operation.movementDelta) updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) - Number(operation.movementDelta) } });
+      if (account && operation.movementDelta) updates.push({ col: "accounts", item: { ...account, balance: r2(Number(account.balance || 0) - Number(operation.movementDelta)) } });
       await bulkSave(updates);
       await delDoc("intermediations", id);
     };
@@ -1854,7 +1893,7 @@
         const id = `account_${account.id}`;
         const existing = (db.opening_balances || []).find(item => item.id === id);
         if (existing && Number(account.balance || 0) !== Number(existing.amount || 0)) return alert("Esta conta já tem movimentos depois do saldo inicial. Não substituas o saldo directamente.");
-        await saveDoc("accounts", { ...account, balance: amount });
+        await saveDoc("accounts", { ...account, balance: r2(amount) });
         await saveDoc("opening_balances", { id, kind, entityId: String(account.id), amount, date, notes });
       } else {
         const walletId = document.getElementById("ob-wallet")?.value;
@@ -2074,10 +2113,10 @@
       if (relatedLots.length || relatedTransfers.length) return alert(`Esta carteira tem histórico associado (${relatedLots.length} lote(s), ${relatedTransfers.length} transferência(s)). Não pode ser eliminada sem uma migração explícita.`);
       if (confirm("Eliminar carteira sem histórico?")) await delDoc("wallets", id);
     };
-    window.adjAccount = async (id, v) => { const a = db.accounts.find(x => String(x.id) === String(id)); if (a) await saveDoc("accounts", { ...a, balance: parseFloat(v) || 0 }); };
+    window.adjAccount = async (id, v) => { const a = db.accounts.find(x => String(x.id) === String(id)); if (a) await saveDoc("accounts", { ...a, balance: r2(v) }); };
     window.delAccount = async (id) => { if (confirm("Eliminar conta?")) await delDoc("accounts", id); };
     window.addWallet = async () => { const n = document.getElementById("nw-name")?.value?.trim(); if (!n) return; await saveDoc("wallets", { id: uid(), name: n, balance: 0, asset: document.getElementById("nw-asset")?.value?.trim() || "USDT" }); };
-    window.addAccount2 = async () => { const n = document.getElementById("na2-name")?.value?.trim(); if (!n) return; const type = document.getElementById("na2-type")?.value || "negocio"; await saveDoc("accounts", { id: uid(), name: n, balance: parseFloat(document.getElementById("na2-bal")?.value) || 0, type }); };
+    window.addAccount2 = async () => { const n = document.getElementById("na2-name")?.value?.trim(); if (!n) return; const type = document.getElementById("na2-type")?.value || "negocio"; await saveDoc("accounts", { id: uid(), name: n, balance: r2(document.getElementById("na2-bal")?.value), type }); };
     window.withdrawProfit = async function () {
       const fromId = document.getElementById("wd-from")?.value;
       const toId = document.getElementById("wd-to")?.value;
@@ -2089,14 +2128,15 @@
       if (!from || !to) return alert("Conta inválida.");
       if (amount > Number(from.balance)) return alert("Saldo insuficiente na conta de origem.");
       if (!confirm(`Confirmar movimento de ${fKz(amount)} de ${from.name} para ${to.name}?`)) return;
+      const amt = r2(amount);
       await bulkSave([
-        { col: "accounts", item: { ...from, balance: Number(from.balance) - amount } },
-        { col: "accounts", item: { ...to, balance: Number(to.balance) + amount } },
+        { col: "accounts", item: { ...from, balance: r2(Number(from.balance) - amt) } },
+        { col: "accounts", item: { ...to, balance: r2(Number(to.balance) + amt) } },
       ]);
       if (to.type === "pessoal") {
         await saveDoc("hub_income", {
           id: uid(), date: today(), category: "Salário", method: to.name,
-          amount, description: `Retirada de lucro — ${from.name} → ${to.name}`
+          amount: amt, description: `Retirada de lucro — ${from.name} → ${to.name}`
         });
         alert("✅ Movimento feito e registado no Hub como Salário.");
       } else {
@@ -2237,7 +2277,7 @@
       const account = db.accounts.find(a => String(a.id) === String(accountId));
       if (!account) return alert("Conta inválida.");
       await bulkSave([
-        { col: "accounts", item: { ...account, balance: Number(account.balance) + Number(sale.totalRevenue || 0) } },
+        { col: "accounts", item: { ...account, balance: r2(Number(account.balance) + Number(sale.totalRevenue || 0)) } },
         { col: "sales", item: { ...sale, pendingPaid: true, accountId: String(accountId) } },
       ]);
       modalState = null; render();
@@ -2256,7 +2296,7 @@
       }
       if (!sale.pendingPayment || sale.pendingPaid) {
         const account = db.accounts.find(a => String(a.id) === String(sale.accountId));
-        if (account) updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) - Number(sale.totalRevenue || 0) } });
+        if (account) updates.push({ col: "accounts", item: { ...account, balance: r2(Number(account.balance || 0) - Number(sale.totalRevenue || 0)) } });
       }
       updates.push({ col: "sales", item: { ...sale, refunded: true, refundedAt: new Date().toISOString() } });
       updates.push({ col: "refunds", item: { id: `refund_${sale.id}`, saleId: String(sale.id), clientId: sale.clientId || null, date: today(), totalUsdt: sale.totalUsdt, totalRevenue: sale.totalRevenue, totalProfit: sale.totalProfit, createdAt: new Date().toISOString() } });
@@ -3097,6 +3137,8 @@
     button, input, select, textarea { min-height: 38px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .field input, .field select, .field textarea { width: 100%; box-sizing: border-box; }
+    .field { min-width: 0; }
+    input[type="date"] { width: 100%; min-width: 0; }
     .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   </style>
 </head>

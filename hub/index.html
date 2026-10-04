@@ -103,10 +103,11 @@
     const fKz = v => `${Number(v || 0).toLocaleString("pt-AO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Kz`;
     const fUSD = v => `$${Number(v || 0).toFixed(2)}`;
     const FIAT_ASSETS = ["EUR", "USD", "GBP"];
-    const fAsset = (v, asset = "Kz") => asset === "Kz" ? fKz(v) : `${Number(v || 0).toFixed(FIAT_ASSETS.includes(asset) ? 2 : 4)} ${asset}`;
+    const fAsset = (v, asset = "Kz") => asset === "Kz" ? fKz(v) : `${FIAT_ASSETS.includes(asset) ? Number(v || 0).toFixed(2) : Number(v || 0).toLocaleString("pt-AO", { maximumFractionDigits: 4 })} ${asset}`;
     const fDate = d => d ? new Date(d).toLocaleDateString("pt-AO") : "—";
     const today = () => new Date().toISOString().split("T")[0];
     const uid = () => Date.now();
+    const r2 = n => Math.round(Number(n || 0) * 100) / 100;
     function currentSplit(business = "global", dateStr) {
       const configured = db.settings?.find(item => item.id === "profit-splits") || db.settings?.find(item => item.id === "profit-split");
       let selected = configured?.[business] || configured?.global || (configured?.id === "profit-split" ? configured : null);
@@ -1027,7 +1028,7 @@
       const updates = [];
       if (sourceType === "account") {
         const account = db.accounts.find(a => String(a.id) === String(sourceId));
-        if (account) updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance || 0) - amount } });
+        if (account) updates.push({ col: "accounts", item: { ...account, balance: r2(Number(account.balance || 0) - amount) } });
       } else if (sourceType === "wallet") {
         let remaining = amount;
         const lots = db.lots.filter(l => String(l.walletId) === String(sourceId) && Number(l.remaining || 0) > 0).sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -1553,7 +1554,7 @@
       const updates = [{ col: "hub_loans", item: { ...loan, payments, returned: autoReturned } }];
       if (accountId) {
         const account = db.accounts.find(a => String(a.id) === String(accountId));
-        if (account) updates.push({ col: "accounts", item: { ...account, balance: Number(account.balance) + amount } });
+        if (account) updates.push({ col: "accounts", item: { ...account, balance: r2(Number(account.balance) + amount) } });
       }
       await bulkSave(updates);
       modal = null; render();
@@ -1613,7 +1614,7 @@
         const account = db.accounts.find(a => String(a.id) === String(accountId));
         if (!account) return alert("Conta inválida.");
         if (amount > Number(account.balance)) return alert("Saldo insuficiente nessa conta.");
-        await saveDoc("accounts", { ...account, balance: Number(account.balance) - amount });
+        await saveDoc("accounts", { ...account, balance: r2(Number(account.balance) - amount) });
       }
 
       await saveDoc("hub_loans", {
@@ -1884,7 +1885,7 @@
       if (!account) return alert("Conta inválida.");
       if (!isIncome && amount > Number(account.balance || 0)) return alert(`Saldo insuficiente em ${account.name}. Saldo actual: ${fKz(account.balance)}.`);
 
-      const newBalance = isIncome ? Number(account.balance) + amount : Number(account.balance) - amount;
+      const newBalance = r2(isIncome ? Number(account.balance) + amount : Number(account.balance) - amount);
       await saveDoc("accounts", { ...account, balance: newBalance });
       await saveDoc(col, { id: uid(), date, category, subcategory, accountId: String(accountId), amount, description });
       modal = null; render();
@@ -1906,7 +1907,7 @@
       const entry = db.hub_income.find(x => String(x.id) === String(id));
       if (entry?.accountId) {
         const account = db.accounts.find(a => String(a.id) === String(entry.accountId));
-        if (account) await saveDoc("accounts", { ...account, balance: Number(account.balance) - Number(entry.amount) });
+        if (account) await saveDoc("accounts", { ...account, balance: r2(Number(account.balance) - Number(entry.amount)) });
       }
       await delDoc("hub_income", id);
     };
@@ -1916,7 +1917,7 @@
       const entry = db.hub_expenses.find(x => String(x.id) === String(id));
       if (entry?.accountId) {
         const account = db.accounts.find(a => String(a.id) === String(entry.accountId));
-        if (account) await saveDoc("accounts", { ...account, balance: Number(account.balance) + Number(entry.amount) });
+        if (account) await saveDoc("accounts", { ...account, balance: r2(Number(account.balance) + Number(entry.amount)) });
       }
       await delDoc("hub_expenses", id);
     };
@@ -2474,6 +2475,8 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     .field input, .field select, .field textarea { width: 100%; box-sizing: border-box; }
+    .field { min-width: 0; }
+    input[type="date"] { width: 100%; min-width: 0; }
     .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   </style>
 </head>
