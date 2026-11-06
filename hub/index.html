@@ -1523,9 +1523,16 @@
           return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
             <div class="modal-title">REGISTAR PAGAMENTO — ${loan.person}</div>
         <div style="font-size:12px;color:#888;margin-bottom:16px">Restante a pagar: <span style="color:#c9a84c;font-weight:700">${fAsset(loanRemaining(loan), loan.asset || "Kz")}</span></div>
-          ${loan.asset && loan.asset !== "Kz" ? `<div style="font-size:10px;color:#ff7850;margin-bottom:12px">⚠ Empréstimo em ${loan.asset}. Se a pessoa devolver em ${loan.asset}, o valor não entra automaticamente numa carteira — regista depois manualmente uma "compra" na Kâmbio se quiseres que volte ao stock.</div>` : ""}
+          ${loan.asset && loan.asset !== "Kz" ? `<div style="font-size:10px;color:#888;margin-bottom:12px">A devolução será reposta no stock da carteira escolhida, mantendo o câmbio original de ${Number(loan.rateKz || db.lots.find(l => String(l.id) === String(loan.lotId))?.rateKz || 0).toLocaleString()} Kz.</div>` : ""}
           <div class="field" style="margin-bottom:12px"><label>Data do Pagamento</label><input type="date" id="lp-date" value="${today()}"/></div>
           <div class="field" style="margin-bottom:12px"><label>Valor Pago (${loan.asset || "Kz"})</label><input type="number" id="lp-amount" step="0.0001" placeholder="ex: 10000"/></div>
+          ${loan.asset && loan.asset !== "Kz" ? `
+          <div class="field" style="margin-bottom:20px"><label>Carteira que Recebeu</label>
+            <select id="lp-wallet">
+              <option value="">— Seleccionar —</option>
+              ${db.wallets.filter(w => (w.asset || "USDT") === loan.asset).map(w => `<option value="${w.id}">${w.name} (${w.asset || "USDT"})</option>`).join("")}
+            </select>
+          </div>` : ""}
           ${(!loan.asset || loan.asset === "Kz") ? `
           <div class="field" style="margin-bottom:20px"><label>Conta que Recebeu</label>
             <select id="lp-account">
@@ -1545,13 +1552,34 @@
       const date = document.getElementById("lp-date")?.value;
       const amount = parseFloat(document.getElementById("lp-amount")?.value) || 0;
       const accountId = document.getElementById("lp-account")?.value || null;
+      const walletId = document.getElementById("lp-wallet")?.value || null;
       if (!amount) return alert("Valor obrigatório.");
       const loan = db.hub_loans.find(l => String(l.id) === String(loanId));
       if (!loan) return;
-      const payments = [...(loan.payments || []), { id: uid(), date, amount, accountId }];
+      const remainingBefore = loanRemaining(loan);
+      if (amount > remainingBefore + 0.0000001) return alert("O valor devolvido não pode ser superior ao valor ainda em dívida.");
+
+      const updates = [];
+      let repaymentLot = null;
+      if (loan.asset && loan.asset !== "Kz") {
+        if (!walletId) return alert("Escolhe a carteira que recebeu a devolução.");
+        const destination = db.wallets.find(w => String(w.id) === String(walletId));
+        if (!destination || (destination.asset || "USDT") !== loan.asset) return alert("Carteira de destino inválida para este activo.");
+
+        const sourceLot = db.lots.find(l => String(l.id) === String(loan.lotId));
+        const rateKz = Number(loan.rateKz || sourceLot?.rateKz || 0);
+        if (rateKz <= 0) return alert("Não foi possível determinar o câmbio original do empréstimo.");
+        const existingLot = db.lots.find(l => String(l.walletId) === String(walletId) && (l.asset || "USDT") === loan.asset && Number(l.rateKz) === rateKz && Number(l.remaining || 0) >= 0);
+        repaymentLot = existingLot
+          ? { ...existingLot, usdt: Number(existingLot.usdt || 0) + amount, remaining: Number(existingLot.remaining || 0) + amount, totalKz: Number(existingLot.totalKz || 0) + amount * rateKz }
+          : { id: uid(), date, supplierName: `Devolução empréstimo — ${loan.person}`, asset: loan.asset, usdt: amount, rateKz, totalKz: amount * rateKz, walletId: String(walletId), remaining: amount, notes: `Devolução do empréstimo ${loan.id}`, createdAt: new Date().toISOString() };
+        updates.push({ col: "lots", item: repaymentLot });
+      }
+
+      const payments = [...(loan.payments || []), { id: uid(), date, amount, accountId, walletId, lotId: repaymentLot?.id || null, rateKz: repaymentLot?.rateKz || null }];
       const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
       const autoReturned = totalPaid >= Number(loan.amount || 0);
-      const updates = [{ col: "hub_loans", item: { ...loan, payments, returned: autoReturned } }];
+      updates.push({ col: "hub_loans", item: { ...loan, payments, returned: autoReturned } });
       if (accountId) {
         const account = db.accounts.find(a => String(a.id) === String(accountId));
         if (account) updates.push({ col: "accounts", item: { ...account, balance: r2(Number(account.balance) + amount) } });
@@ -1561,9 +1589,14 @@
     };
 
     window.markLoanReturned = async function (id) {
-      if (!confirm("Marcar como devolvido?")) return;
       const item = db.hub_loans.find(x => x.id === id);
-      if (item) await saveDoc("hub_loans", { ...item, returned: true });
+      if (!item) return;
+      if (loanRemaining(item) > 0.0000001) {
+        openModal("loan-payment", id);
+        return;
+      }
+      if (!confirm("Marcar como devolvido?")) return;
+      await saveDoc("hub_loans", { ...item, returned: true });
     };
 
     window.saveModal_obligation = async function () {
@@ -1593,6 +1626,7 @@
       const editing = modalState?.editId ? db.hub_loans.find(l => String(l.id) === String(modalState.editId)) : null;
       const id = modalState?.editId || uid();
       let lotId = editing?.lotId || null, walletId = editing?.walletId || null;
+      let rateKz = editing?.rateKz || null;
       let accountId = editing?.accountId || null;
 
       if (asset !== "Kz" && !editing) {
@@ -1601,6 +1635,7 @@
         if (!lot) return alert("Escolhe o lote de origem.");
         if (amount > Number(lot.remaining)) return alert("Quantidade superior ao stock disponível no lote.");
         walletId = lot.walletId;
+        rateKz = Number(lot.rateKz || 0);
         const wallet = db.wallets.find(w => String(w.id) === String(walletId));
         await bulkSave([
           { col: "lots", item: { ...lot, remaining: Number(lot.remaining) - amount } },
@@ -1619,7 +1654,7 @@
 
       await saveDoc("hub_loans", {
         id, person, amount, asset, lotId, walletId, accountId, date, dueDate, notes,
-        returned: editing?.returned || false, payments: editing?.payments || []
+        returned: editing?.returned || false, payments: editing?.payments || [], rateKz
       });
       modal = null; window._loanAsset = null; render();
     };
